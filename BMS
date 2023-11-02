@@ -152,14 +152,24 @@ def Umbrella_sampling (NS,data, sigma ,target_function, proposal_function ):
         #Update weight
         
         weight = np.abs(q1 - rh * q2)
-    return q1,q2
+    
     
     #nomalize q1 and q2
-    Z1 = np.sum(q1)/len(q1)
-    Z2 = np.sum(q2)/len(q2)
-
+    #Z1 = np.sum(q1)
+    #Z2 = np.sum(q2)
+    print(rh)
+    h= rh +1
+    Z1=rh/h
+    Z2 = 1/h
+    
+    
+    #plt.plot([q2,q1])
+    #plt.title('Z1,Z2')
+    #plt.tight_layout()
+    #plt.show()  
     #graphing
     plt.pie([Z2,Z1], labels= [Z2,Z1],colors = ["red","blue"])
+    
     plt.annotate('Red is Z2', xy=(-1.1,0.8))
     plt.annotate('Blue is Z1', xy=(-1.1, 0.9)) 
     plt.title('Z1,Z2')
