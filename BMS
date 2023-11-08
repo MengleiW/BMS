@@ -155,12 +155,12 @@ def Umbrella_sampling (NS,data, sigma ,target_function, proposal_function ):
     
     
     #nomalize q1 and q2
-    #Z1 = np.sum(q1)
-    #Z2 = np.sum(q2)
-    print(rh)
-    h= rh +1
-    Z1=rh/h
-    Z2 = 1/h
+    Z1 = np.sum(np.exp(q1))
+    Z2 = np.sum(np.exp(q2))
+    print('Z1=',Z1)
+    #h= rh +1
+    #Z2=rh/h
+    #Z1 = 1/h
     
     
     #plt.plot([q2,q1])
@@ -186,7 +186,7 @@ if __name__ == '__main__':
     sigma = 0.1
     #HMModel_compaire (data,sigma)
     #RisModel_compaire (data,sigma)
-   
+                                                            
     tht2 = data['model02']['tht']
 
     
