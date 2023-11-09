@@ -406,14 +406,15 @@ def Metropolis_hasting(weights,M,m,target_function,proposal_function ):
         
         M: number of samples 
         
-        y: data from either first model or second moddel (y1,y2)
+        Target_function:   Fucntion of distribution that we wish to sample from. 
         
-        q3: target distrabution
+        proposal_function: Function that we propse for canidates.
+        
        
     Outputs:
    
-         samples: Theta_i sample gather from the target distribution.
-
+         Theta1: Sample gather from the target distribution.
+         Theta2: Sample gather from the target distribution.
        
        
      Modified:
@@ -469,7 +470,9 @@ def Umbrella_sampling (NS,data, sigma ,target_function, proposal_function ):
         sigma: double >0, the standard diviation of Multivariate normal
                distribution representing the experimental error.
 
-       Target_function:   Fucntion
+       Target_function:   Fucntion of distribution that we wish to sample from. 
+       
+       proposal_function: Function that we propse for canidates.
        
         Outputs:
        
@@ -478,7 +481,7 @@ def Umbrella_sampling (NS,data, sigma ,target_function, proposal_function ):
            
         Modified:
        
-            10/20/2023 (Menglei Wang)
+            11/8/2023 (Menglei Wang)
            
         """
     #extrac data
