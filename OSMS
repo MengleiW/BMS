@@ -1,0 +1,157 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Dec  8 19:02:42 2023
+
+@author: whisk
+"""
+import numpy as np
+import scipy
+import matplotlib.pyplot as plt
+#import pymc3 as pm
+#import theano.tensor as tt
+
+
+def damped_oscillator(t, y, gamma, k):
+    f_t = 0  
+    #f_t = np.sin(t) 
+    return [y[1], f_t - gamma*y[1] - k*y[0]]
+
+def simulate_system(gamma, k, initial_conditions, ts, N):
+    t = np.linspace(ts[0], ts[1], N)
+    sol = scipy.integrate.solve_ivp(damped_oscillator, ts, initial_conditions, args=(gamma, k), t_eval=t)
+    y = sol.y[0]  
+    yp = sol.y[1]  
+    return y, yp
+
+def euler_forward(gamma, k, initial_conditions, ts, num_samples):
+    t = np.linspace(ts[0], ts[1], num_samples)
+    h = (ts[1] - ts[0]) / (num_samples - 1)
+    y = np.zeros((num_samples, 2))
+    y[0] = initial_conditions
+
+    for j in range(num_samples-1):
+        y[j+1] = y[j] + h * np.array(damped_oscillator(t[j], y[j], gamma, k))
+    
+    return t, y
+
+def trapezoidal_method(gamma, k, initial_conditions, ts, num_samples):
+    t = np.linspace(ts[0], ts[1], num_samples)
+    h = (ts[1] - ts[0]) / (num_samples - 1)
+    y = np.zeros((num_samples, 2))
+    y[0] = initial_conditions
+
+    for j in range(num_samples-1):
+        f_n = np.array(damped_oscillator(t[j], y[j], gamma, k))
+        y_pred = y[j] + h * f_n
+        f_n_plus_1 = np.array(damped_oscillator(t[j+1], y_pred, gamma, k))
+        y[j+1] = y[j] + h/2 * (f_n + f_n_plus_1)
+    
+    return t, y
+
+
+def metropolis_hastings(init, iterations, sigma, kde):
+    samples = [init]
+    current = np.array(init)
+
+    for i in range(iterations):
+        proposed = current + np.random.normal(0, sigma, size=2)
+        r = kde(proposed) / kde(current)
+
+        if np.random.random() < min(1, r):
+            current = proposed
+
+        samples.append(current)
+
+    return np.array(samples)
+
+def RIS_FindZ(likelihood, prior,y):
+    """
+    Description: To find the Z = nomalizing constant using Importat sampling method given liklihood and prior
+
+    Inputs:
+       
+       
+        log_Likelihood: Single, (1,1) , l(y|theta_i, M) where theta_i stands for variable of interest , y stands for the data and
+        M is our current model.
+       
+        prior : Single, (1,N) , g(theta_i) where theta_i stands for variable of interest.
+       
+       
+        Outputs:
+       
+            Zhat: (1,1) approximatioin of nomalized posterior.
+
+           
+           
+        Modified:
+       
+            10/15/2023 (Menglei Wang)
+           
+        """
+
+    # Data size
+    N, m = y.shape
+
+
+    #Using multivariate gaussian as my auxiliry function
+    f = -0.5*m*np.log(2*np.pi) - 0.5*m*np.log(sigma**2) \
+        #- 0.5/(sigma**2)*np.sum(y**2,axis=1)
+        
+    #Using t-distributions as auxiliary normalized function
+    #t = 100
+    #f = np.log(scipy.special.gammaln((t+1)/2))+(-(t+1)/2)*np.log(1+(m**2)/t)-np.log(((t*math.pi)**0.5)*scipy.special.gammaln(t/2))
+    print('f =', f)
+    if f < 0:
+        f =-f 
+    # Calculating the normalized posterior
+    Zhat = 1/(np.sum(f/(prior * likelihood))/N)
+    print('Zhat =', Zhat)
+    
+    return Zhat
+# Parameters 
+
+m = 1
+k = 0.5
+initial_conditions = [1, 0]  
+ts = [0, 10]   
+IS = [0, 0] 
+N = 10000  
+sigma = 0.3 
+
+
+y, yp= simulate_system(0, k, initial_conditions, ts, N)
+
+
+
+kde = scipy.stats.gaussian_kde(np.vstack([y, yp]))
+
+
+
+samples = metropolis_hastings(IS, N, sigma, kde)
+samples = samples[1:, :]
+print('samples = ',samples)
+
+euler = euler_forward(0, k, initial_conditions, ts, N)[1]
+print('euler=',euler)
+trapazoidal = trapezoidal_method(0, k, initial_conditions, ts, N)[1]
+print('tradaziodl=',trapazoidal)
+
+log_likelihood_e = np.sum(scipy.stats.norm.logpdf(samples, loc=euler, scale=sigma))
+print('lt=',log_likelihood_e)
+log_likelihood_t = np.sum(scipy.stats.norm.logpdf(samples, loc=trapazoidal, scale=sigma))
+print('lt=',log_likelihood_t)
+prior_euler = 0.5
+prior_trapazoidal = 0.5
+Z1 = RIS_FindZ(log_likelihood_e,prior_euler,samples)
+Z2 = RIS_FindZ(log_likelihood_t,prior_trapazoidal,samples)
+C = Z2/Z1
+print('c = ' , C)
+        
+#graphing
+plt.pie([Z2,Z1], labels= [Z2,Z1],colors = ["red","blue"])
+plt.annotate('Red is Z2', xy=(-1.1,0.8))
+plt.annotate('Blue is Z1', xy=(-1.1, 0.9)) 
+plt.title('Z1,Z2')
+plt.tight_layout()
+plt.show()
+
