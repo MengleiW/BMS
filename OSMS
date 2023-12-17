@@ -1,13 +1,7 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sat Dec  8 19:02:42 2023
-
-@author: whisk
-"""
 import numpy as np
 import scipy
 import matplotlib.pyplot as plt
-import math
+#import math
 #import pymc3 as pm
 #import theano.tensor as tt
 
@@ -29,7 +23,7 @@ def damped_oscillator(t, y, gamma, k):
     #f_t = np.sin(t) 
     return [y[1], f_t - gamma*y[1] - k*y[0]]
 
-def simulate_system(gamma, k, initial_conditions, ts, N):
+def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level):
     """
     Simulates the damped oscillator system over a given time span using solve_ivp.
 
@@ -39,17 +33,23 @@ def simulate_system(gamma, k, initial_conditions, ts, N):
       initial_conditions: List, initial state of the system.
       ts: List, time span for simulation .
       N: Integer, number of points to evaluate in the time span.
+      noise_level: number, level of random noise adding to the simulated output.
 
     Outputs:
       (y, yp): list, where y is the position array and yp is the velocity array over the time span.
     """
     t = np.linspace(ts[0], ts[1], N)
     sol = scipy.integrate.solve_ivp(damped_oscillator, ts, initial_conditions, args=(gamma, k), t_eval=t)
-    y = sol.y[0]  
+    
+    y = sol.y[0]
+    noise1 = np.random.normal(0, noise_level, y.shape)
+    y = y + noise1
     yp = sol.y[1]  
+    noise2 = np.random.normal(0, noise_level, y.shape)
+    yp = yp + noise2
     return y, yp
 
-def euler_forward(gamma, k, initial_conditions, ts, num_samples):
+def euler_forward(gamma, k, initial_conditions, t):
     """
    Numerically approximates the solution of the damped oscillator using the Euler forward method.
 
@@ -61,19 +61,18 @@ def euler_forward(gamma, k, initial_conditions, ts, num_samples):
      num_samples: Integer, number of samples for approximation.
 
    Outputs:
-     (t, y): list, where t is the array of time points and y is the array of system states at each time point.
+     y: list, where t is the array of time points and y is the array of system states at each time point.
    """
-    t = np.linspace(ts[0], ts[1], num_samples)
-    h = (ts[1] - ts[0]) / (num_samples - 1)
-    y = np.zeros((num_samples, 2))
+    y = np.zeros((len(t), 2))
     y[0] = initial_conditions
+    h = (t[-1] - t[0]) / (len(t) - 1)  
 
-    for j in range(num_samples-1):
-        y[j+1] = y[j] + h * np.array(damped_oscillator(t[j], y[j], gamma, k))
+    for i in range(1, len(t)):
+        y[i] = y[i-1] + h * np.array(damped_oscillator(t[i-1], y[i-1], gamma, k))
     
-    return t, y
+    return y
 
-def trapezoidal_method(gamma, k, initial_conditions, ts, num_samples):
+def trapezoidal_method(gamma, k, initial_conditions, t):
     """
     Numerically approximates the solution of the damped oscillator using the trapezoidal method.
 
@@ -87,144 +86,152 @@ def trapezoidal_method(gamma, k, initial_conditions, ts, num_samples):
     Outputs:
        (t, y): list, where t is the array of time points and y is the array of system states at each time point.
     """
-    t = np.linspace(ts[0], ts[1], num_samples)
-    h = (ts[1] - ts[0]) / (num_samples - 1)
-    y = np.zeros((num_samples, 2))
+    y = np.zeros((len(t), 2))
     y[0] = initial_conditions
+    h = (t[-1] - t[0]) / (len(t) - 1) 
 
-    for j in range(num_samples-1):
-        f_n = np.array(damped_oscillator(t[j], y[j], gamma, k))
-        y_pred = y[j] + h * f_n
-        f_n_plus_1 = np.array(damped_oscillator(t[j+1], y_pred, gamma, k))
-        y[j+1] = y[j] + h/2 * (f_n + f_n_plus_1)
+    for i in range(1, len(t)):
+        f_n = np.array(damped_oscillator(t[i-1], y[i-1], gamma, k))
+        y_pred = y[i-1] + h * f_n
+        f_n_plus_1 = np.array(damped_oscillator(t[i], y_pred, gamma, k))
+        y[i] = y[i-1] + h/2 * (f_n + f_n_plus_1)
+    return y
+
+def gauss_log_likelihood(simulated_y, observed_y, sigma_y):
+    """
+    Description: Evaluate the multivariate Gaussian log likelihood function
+        associated with model outputs
+
+    Inputs:
+       
+        simulated_y : double, (N,m) array of sample model outputs.
+        
+        observed_y : double, (N,m) array of data.
+       
+        sigma: double >0, the standard diviation of Multivariate normal
+            distribution representing the experimental error.
+       
+       
+    Outputs:
+   
+        l: double, (N,) vector of log-likelihood values
+           
+           
+    Modified:
+       
+        10/08/2023 (Menglei Wang)
+           
+    """
+    difference = np.abs(observed_y - simulated_y)
+   
+    # Gaussian log-likelihood
+    ll = -0.5*m*np.log(2*np.pi) - 0.5*m*np.log(sigma_y**2) \
+        - 0.5/(sigma_y**2)*np.sum(difference**2,axis=1)
     
-    return t, y
+    return ll
 
 def RIS_FindZ(log_likelihood, prior,y):
     """
     Description: To find the Z = nomalizing constant using Importat sampling method given liklihood and prior
 
     Inputs:
-       
-       
+
+
         log_Likelihood: Single, (1,1) , l(y|theta_i, M) where theta_i stands for variable of interest , y stands for the data and
         M is our current model.
-       
+
         prior : Single, (1,N) , g(theta_i) where theta_i stands for variable of interest.
-       
-       
+
+
         Outputs:
-       
+
             Zhat: (1,1) approximatioin of nomalized posterior.
 
-           
-           
+
+
         Modified:
-       
+
             10/15/2023 (Menglei Wang)
-           
+
         """
 
     N, m = y.shape
 
-    
+
     p= np.log(prior) + log_likelihood
-    
-    
+
+
     Zhat = scipy.special.logsumexp(p) - np.log(N)
-    
+
     return Zhat
-def metropolis_hastings(init, iterations, sigma, kde):
+def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_y, sigma_yp):
     """
-    Description: Use the Metropolis-Hastings sampler to generate a sample with kernel density estimation.
+    Computes the combined log-likelihood of the observed position and velocity data for a given simulated dataset.
 
     Inputs:
-       
-        sigma: double >0, the standard deviation of Multivariate normal
-               distribution representing the experimental error.
-       
-        m: the dimension of the variables.
-        
-        M: number of samples 
-        
-        Target_function:   Fucntion of distribution that we wish to sample from. 
-        
-        proposal_function: Function that we propose for candidates.
-        
-       
+        simulated: Array, the simulated data from the model.
+        observed_y: Array, observed data for position (y).
+        observed_yp: Array, observed data for velocity (y').
+        sigma_y: Float, standard deviation of error in position measurements.
+        sigma_yp: Float, standard deviation of error in velocity measurements.
+
     Outputs:
-   
-         Samples: (y1, y2), Sample gathered from the target distribution.
-         
-       
-       
-     Modified:
-   
-         11/09/2023 (Menglei Wang)
+        log_likelihood: Float, the combined log-likelihood value of the observed data given the simulated model outputs.
+
     """
-    samples = [init]
-    current = np.array(init)
+    residuals_y = observed_y - simulated[:, 0]
+    residuals_yp = observed_yp - simulated[:, 1]
+    ll_y = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
+    ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
+    return ll_y + ll_yp
+def compute_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y, sigma_yp):
+    """
+    Computes the marginal likelihood of a model given a range of parameter values and observed data.
 
-    for i in range(iterations):
-        proposed = current + np.random.normal(0, sigma, size=2)
-        r = kde(proposed) / kde(current)
+    Inputs:
+        method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
+        gammas: Array, range of parameter values to be tested.
+        observed_y: Array, observed data for position (y).
+        observed_yp: Array, observed data for velocity (y').
+        sigma_y: Float, standard deviation of error in position measurements.
+        sigma_yp: Float, standard deviation of error in velocity measurements.
 
-        if np.random.random() < min(1, r):
-            current = proposed
+    Outputs:
+        log_marginal_likelihood: Float, the logarithm of the marginal likelihood for the given model and parameter range.
 
-        samples.append(current)
-
-    return np.array(samples)
-
+    """
+    log_likelihoods = []
+    for i in gammas:
+        simulated_data = method(i, k, [1, 0], T)
+        log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
+        log_likelihoods.append(log_likelihood)
+    # Use logsumexp for numerical stability
+    log_marginal_likelihood = scipy.special.logsumexp(log_likelihoods) - np.log(len(gammas))
+    return log_marginal_likelihood
 
 # Parameters 
-
 m = 1
 k = 0.5
-initial_conditions = [1, 0]  
-ts = [0, 10]   
-IS = [0, 0] 
-N = 100  
-sigma = 0.3 
+initial_conditions = [1, 0]
+gammas = np.linspace(0, 1, 100)
+T = np.linspace(0, 100, 1000)
+noise_level = 0.0001
+N = 1000 
+sigma_y = 0.3 
+sigma_yp = 0.1
 
-
-y, yp= simulate_system(0, k, initial_conditions, ts, N)
-
-
-
-kde = scipy.stats.gaussian_kde(np.vstack([y, yp]))
+for gamma in gammas:
+    observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0, 100], N, noise_level)
 
 
 
-samples = metropolis_hastings(IS, N, sigma, kde)
-samples =  samples[1:, :]
-print('samples = ',samples)
+Z_e = compute_marginal_likelihood(euler_forward, gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+Z_t = compute_marginal_likelihood(trapezoidal_method, gammas, observed_y, observed_yp, sigma_y, sigma_yp)
 
-euler = np.abs(euler_forward(0, k, initial_conditions, ts, N)[1])
-print('euler=',euler)
-trapazoidal = np.abs(trapezoidal_method(0, k, initial_conditions, ts, N)[1])
-print('tradaziodl=',trapazoidal)
-
-log_likelihood_e = np.sum(scipy.stats.norm.logpdf(samples, loc=euler, scale=sigma))
-print('le=',log_likelihood_e)
-log_likelihood_t = np.sum(scipy.stats.norm.logpdf(samples, loc=trapazoidal, scale=sigma))
-print('lt=',log_likelihood_t)
-prior_euler = 0.3
-prior_trapazoidal = 0.7
-Z1 = RIS_FindZ(log_likelihood_e,prior_euler,samples)
-
-Z2 = RIS_FindZ(log_likelihood_t,prior_trapazoidal,samples)
-
-C = Z2/Z1
-Z2 = C
-Z1 = 1-C
-print('c = ' , C)
-        
 #graphing
-plt.pie([Z2,Z1], labels= [Z2,Z1],colors = ["red","blue"])
-plt.annotate('Red is Z2', xy=(-1.1,0.8))
-plt.annotate('Blue is Z1', xy=(-1.1, 0.9)) 
+plt.pie([Z_e,Z_t], labels= [Z_e,Z_t],colors = ["red","blue"])
+plt.annotate('Red is Z_e', xy=(-1.1,0.8))
+plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
 plt.title('Z1,Z2')
 plt.tight_layout()
 plt.show()
-
