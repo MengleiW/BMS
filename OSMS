@@ -23,7 +23,7 @@ def damped_oscillator(t, y, gamma, k):
     #f_t = np.sin(t) 
     return [y[1], f_t - gamma*y[1] - k*y[0]]
 
-def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level):
+def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, noise_level_j):
     """
     Simulates the damped oscillator system over a given time span using solve_ivp.
 
@@ -33,20 +33,24 @@ def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level):
       initial_conditions: List, initial state of the system.
       ts: List, time span for simulation .
       N: Integer, number of points to evaluate in the time span.
-      noise_level: number, level of random noise adding to the simulated output.
-
+      smooth_noise_level: number, level of random noise in the first half (smooth phase).
+      jumpy_noise_level: number, level of random noise in the second half (jumpy phase).
     Outputs:
       (y, yp): list, where y is the position array and yp is the velocity array over the time span.
     """
     t = np.linspace(ts[0], ts[1], N)
     sol = scipy.integrate.solve_ivp(damped_oscillator, ts, initial_conditions, args=(gamma, k), t_eval=t)
-    
+    half = N // 2
     y = sol.y[0]
-    noise1 = np.random.normal(0, noise_level, y.shape)
-    y = y + noise1
     yp = sol.y[1]  
-    noise2 = np.random.normal(0, noise_level, y.shape)
-    yp = yp + noise2
+    # Apply smooth noise to the first half and jumpy noise to the second half
+    noise1 = np.concatenate([np.random.normal(0, noise_level_s,  half),
+                             np.random.normal(0, noise_level_j, N -  half)])
+    noise2 = np.concatenate([np.random.normal(0, noise_level_s,  half),
+                             np.random.normal(0, noise_level_j, N -  half)])
+    y += noise1
+    yp += noise2
+    
     return y, yp
 
 def euler_forward(gamma, k, initial_conditions, t):
@@ -184,7 +188,7 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_
     ll_y = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
     ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
     return ll_y + ll_yp
-def compute_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y, sigma_yp):
+def compute_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, check_points):
     """
     Computes the marginal likelihood of a model given a range of parameter values and observed data.
 
@@ -195,19 +199,22 @@ def compute_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y
         observed_yp: Array, observed data for velocity (y').
         sigma_y: Float, standard deviation of error in position measurements.
         sigma_yp: Float, standard deviation of error in velocity measurements.
+        check-points: Array, the point in time given to check model selection.
 
     Outputs:
         log_marginal_likelihood: Float, the logarithm of the marginal likelihood for the given model and parameter range.
 
     """
-    log_likelihoods = []
-    for i in gammas:
-        simulated_data = method(i, k, [1, 0], T)
-        log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
-        log_likelihoods.append(log_likelihood)
-    # Use logsumexp for numerical stability
-    log_marginal_likelihood = scipy.special.logsumexp(log_likelihoods) - np.log(len(gammas))
-    return log_marginal_likelihood
+    results = []
+    for ck in check_points:
+        log_likelihoods = []
+        for gamma in gammas:
+            simulated_data = method(gamma, k, [1, 0], T[:ck])
+            log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y[:ck], observed_yp[:ck], sigma_y, sigma_yp)
+            log_likelihoods.append(log_likelihood)
+        log_marginal_likelihood = scipy.special.logsumexp(log_likelihoods) - np.log(len(gammas))
+        results.append(log_marginal_likelihood)
+    return results
 
 # Parameters 
 m = 1
@@ -215,23 +222,34 @@ k = 0.5
 initial_conditions = [1, 0]
 gammas = np.linspace(0, 1, 100)
 T = np.linspace(0, 100, 1000)
-noise_level = 0.0001
 N = 1000 
 sigma_y = 0.3 
 sigma_yp = 0.1
+noise_level_s = 0.0001
+noise_level_j = 0.01
+check_points = [10,50,80]
 
 for gamma in gammas:
-    observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0, 100], N, noise_level)
+    observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0, 100], N, noise_level_s, noise_level_j)
 
 
 
-Z_e = compute_marginal_likelihood(euler_forward, gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-Z_t = compute_marginal_likelihood(trapezoidal_method, gammas, observed_y, observed_yp, sigma_y, sigma_yp)
 
-#graphing
-plt.pie([Z_e,Z_t], labels= [Z_e,Z_t],colors = ["red","blue"])
-plt.annotate('Red is Z_e', xy=(-1.1,0.8))
-plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
-plt.title('Z1,Z2')
-plt.tight_layout()
+Z_e = compute_marginal_likelihood(euler_forward, gammas, observed_y, observed_yp, sigma_y, sigma_yp, check_points )
+Z_t = compute_marginal_likelihood(trapezoidal_method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, check_points)
+
+# Visualization (example: line plot showing which model is better at each interval)
+plt.figure(figsize=(10, 6))
+plt.plot([T[i-1] for i in check_points], Z_e, label='Euler Forward', marker='o')
+plt.plot([T[i-1] for i in check_points], Z_t, label='Trapezoidal', marker='x')
+plt.xlabel('Time')
+plt.ylabel('Log Marginal Likelihood')
+plt.title('Model Comparison Over Time')
+plt.legend()
 plt.show()
+#graphing
+for i, ck in enumerate(check_points):
+    plt.figure(figsize=(6, 6))
+    plt.pie([Z_e[i], Z_t[i]], labels=['Euler Forward', 'Trapezoidal'], colors=['red', 'blue'], autopct='%1.1f%%')
+    plt.title(f'Model Comparison at Time {T[ck-1]}')
+    plt.show()
