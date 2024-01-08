@@ -53,121 +53,51 @@ def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, n
     
     return y, yp
 
-def euler_forward(gamma, k, initial_conditions, t):
+def euler_forward(gammas, k, y, t, h):
     """
-   Numerically approximates the solution of the damped oscillator using the Euler forward method.
-
-   Inputs:
-     gamma: Float, damping coefficient.
-     k: Float, stiffness coefficient.
-     initial_conditions: List, initial state of the system .
-     ts: List, time span for simulation .
-     num_samples: Integer, number of samples for approximation.
-
-   Outputs:
-     y: list, where t is the array of time points and y is the array of system states at each time point.
-   """
-    y = np.zeros((len(t), 2))
-    y[0] = initial_conditions
-    h = (t[-1] - t[0]) / (len(t) - 1)  
-
-    for i in range(1, len(t)):
-        y[i] = y[i-1] + h * np.array(damped_oscillator(t[i-1], y[i-1], gamma, k))
-    
-    return y
-
-def trapezoidal_method(gamma, k, initial_conditions, t):
-    """
-    Numerically approximates the solution of the damped oscillator using the trapezoidal method.
+    Numerically approximates the solution of the damped oscillator using the Euler forward method for a single time point.
 
     Inputs:
-      gamma: Float, damping coefficient.
+      gammas: Array, range of damping coefficients.
       k: Float, stiffness coefficient.
-      initial_conditions: List, initial state of the system .
-      ts: List, time span for simulation.
-      num_samples: Integer, number of samples for approximation.
+      y: 2D Array, initial states of the system for each gamma (position and velocity).
+      t: Float, single time point.
+      h: Float, time step.
 
     Outputs:
-       (t, y): list, where t is the array of time points and y is the array of system states at each time point.
+      y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
-    y = np.zeros((len(t), 2))
-    y[0] = initial_conditions
-    h = (t[-1] - t[0]) / (len(t) - 1) 
 
-    for i in range(1, len(t)):
-        f_n = np.array(damped_oscillator(t[i-1], y[i-1], gamma, k))
-        y_pred = y[i-1] + h * f_n
-        f_n_plus_1 = np.array(damped_oscillator(t[i], y_pred, gamma, k))
-        y[i] = y[i-1] + h/2 * (f_n + f_n_plus_1)
+    for i, gamma in enumerate(gammas):
+        y[i,:] += h * np.array(damped_oscillator(t, y[i, :], gamma, k)) 
+        
+
     return y
 
-def gauss_log_likelihood(simulated_y, observed_y, sigma_y):
+def trapezoidal_method(gammas, k, y, t, h):
     """
-    Description: Evaluate the multivariate Gaussian log likelihood function
-        associated with model outputs
+    Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
 
     Inputs:
-       
-        simulated_y : double, (N,m) array of sample model outputs.
-        
-        observed_y : double, (N,m) array of data.
-       
-        sigma: double >0, the standard diviation of Multivariate normal
-            distribution representing the experimental error.
-       
-       
+      gammas: Array, range of damping coefficients.
+      k: Float, stiffness coefficient.
+      y: 2D Array, initial states of the system for each gamma (position and velocity).
+      t: Float, single time point.
+      h: Float, time step.
+
     Outputs:
-   
-        l: double, (N,) vector of log-likelihood values
-           
-           
-    Modified:
-       
-        10/08/2023 (Menglei Wang)
-           
+      y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
-    difference = np.abs(observed_y - simulated_y)
-   
-    # Gaussian log-likelihood
-    ll = -0.5*m*np.log(2*np.pi) - 0.5*m*np.log(sigma_y**2) \
-        - 0.5/(sigma_y**2)*np.sum(difference**2,axis=1)
-    
-    return ll
+    for i, gamma in enumerate(gammas):
+        f_n = np.array(damped_oscillator(t, y[i, :], gamma, k))
+        y_pred = y[i, :] + h * f_n
+        f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gamma, k))
+        y[i, :] = y[i, :] + h/2 * (f_n + f_n_plus_1)  
+         
 
-def RIS_FindZ(log_likelihood, prior,y):
-    """
-    Description: To find the Z = nomalizing constant using Importat sampling method given liklihood and prior
-
-    Inputs:
+    return y
 
 
-        log_Likelihood: Single, (1,1) , l(y|theta_i, M) where theta_i stands for variable of interest , y stands for the data and
-        M is our current model.
-
-        prior : Single, (1,N) , g(theta_i) where theta_i stands for variable of interest.
-
-
-        Outputs:
-
-            Zhat: (1,1) approximatioin of nomalized posterior.
-
-
-
-        Modified:
-
-            10/15/2023 (Menglei Wang)
-
-        """
-
-    N, m = y.shape
-
-
-    p= np.log(prior) + log_likelihood
-
-
-    Zhat = scipy.special.logsumexp(p) - np.log(N)
-
-    return Zhat
 def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_y, sigma_yp):
     """
     Computes the combined log-likelihood of the observed position and velocity data for a given simulated dataset.
@@ -183,14 +113,55 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_
         log_likelihood: Float, the combined log-likelihood value of the observed data given the simulated model outputs.
 
     """
-    residuals_y = observed_y - simulated[:, 0]
-    residuals_yp = observed_yp - simulated[:, 1]
-    ll_y = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
-    ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
-    return ll_y + ll_yp
-def compute_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, check_points):
+    ll_y = np.zeros(len(simulated))
+    ll_yp = np.zeros(len(simulated))
+
+    for i in range(len(simulated)):
+        residuals_y = observed_y - simulated[i, :, 0]
+        residuals_yp = observed_yp - simulated[i, :, 1]
+
+        lly = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
+        llyp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
+
+        ll_y[i] = lly
+        ll_yp[i] = llyp
+
+    return ll_y, ll_yp
+
+def HM_FindZ(log_likelihood, N):
     """
-    Computes the marginal likelihood of a model given a range of parameter values and observed data.
+    Description: To find the Z = nomalizing constant using Importat sampling method given liklihood and prior
+
+    Inputs:
+       
+       
+        log_Likelihood: Single, (1,1) , l(y|theta_i, M) where theta_i stands for variable of interest , y stands for the data and
+        M is our current model.
+       
+       
+        Outputs:
+       
+            Zhat: (1,1) approximatioin of nomalized posterior.
+
+           
+           
+        Modified:
+       
+            10/05/2023 (Menglei Wang)
+           
+        """
+   
+    #unlog the log_likehood
+    likelihood = np.exp(log_likelihood)
+    
+    #calculate Zhat
+    Zhat = 1/((np.sum(1/likelihood))/N)
+    
+    return Zhat
+
+def RIS_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, initial_conditions, T, k):
+    """
+    Computes the marginal likelihood of a model using Reverse Importance Sampling.
 
     Inputs:
         method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
@@ -199,71 +170,49 @@ def compute_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y
         observed_yp: Array, observed data for velocity (y').
         sigma_y: Float, standard deviation of error in position measurements.
         sigma_yp: Float, standard deviation of error in velocity measurements.
-        check_points: Array, the point in time given to check model selection.
+        initial_conditions: Array, initial conditions of the system.
+        T: Array, time points for evaluation.
+        k: Float, stiffness coefficient.
 
     Outputs:
         results: List of lists, each inner list contains the log marginal likelihoods for each gamma at a specific checkpoint.
+        data: Array, simulated data for each gamma over time.
     """
-
-def compute_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, check_points):
     results = []
-    for ck in check_points:
-        log_likelihoods = []
-        for gamma in gammas:
-            simulated_data = method(gamma, k, [1, 0], T[:ck])
-            log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y[:ck], observed_yp[:ck], sigma_y, sigma_yp)
-            log_likelihoods.append(np.exp(log_likelihood))  # Convert to likelihood
-        results.append(log_likelihoods)
-    return results
-    return results
+    data = np.zeros((len(gammas), len(T), 2))
+    data[:, 0, 0] = initial_conditions[0]  
+    data[:, 0, 1] = initial_conditions[1] 
 
+    for i, t in enumerate(T[1:], start=1): 
+        h = t - T[i - 1]
+        data[:, i, :] = method(gammas, k, data[:, i - 1, :], t, h)
+        log_likelihood_y, log_likelihood_yp = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        Z_y = HM_FindZ(log_likelihood_y, len(gammas))
+        Z_yp = HM_FindZ(log_likelihood_yp, len(gammas))
+        results.append([Z_y, Z_yp])
 
+    return results, data
 # Parameters 
 m = 1
 k = 0.5
 initial_conditions = [1, 0]
-gammas = np.linspace(0, 1, 3)
+gammas = np.linspace(0, 1, 10)
 T = np.linspace(0, 100, 1000)
+
 N = 1000 
 sigma_y = 0.3 
 sigma_yp = 0.1
 noise_level_s = 0.0001
 noise_level_j = 0.01
-check_points = [10,50,80]
 
-for gamma in gammas:
-    observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0,100], N, noise_level_s, noise_level_j)
+#y = euler_forward(gammas, k, initial_conditions, T)
+#print('y=',y)
+#for gamma in gammas:
+gamma = 0.1
+observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0,100], N, noise_level_s, noise_level_j)
 
 # Compute marginal likelihoods for each method
-Z_e= compute_marginal_likelihood(euler_forward, gammas, observed_y, observed_yp, sigma_y, sigma_yp, check_points)
-Z_t = compute_marginal_likelihood(trapezoidal_method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, check_points)
-
-# Visualization
-for i, ck in enumerate(check_points):
-    plt.figure(figsize=(10, 6))
-    plt.plot(gammas,Z_e[i], label='Euler Forward', marker='o')
-    plt.plot(gammas, Z_t[i], label='Trapezoidal', marker='x')
-    plt.xlabel('Gamma')
-    plt.ylabel('Log Marginal Likelihood')
-    plt.title(f'Model Comparison at Time {T[ck-1]}')
-    plt.legend()
-    plt.show()
+Z_e,data_e = Z_t,data_t = RIS_marginal_likelihood(euler_forward, gammas, observed_y, observed_yp, sigma_y, sigma_yp, initial_conditions, T, k)
+Z_t,data_t = RIS_marginal_likelihood(trapezoidal_method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, initial_conditions, T, k)
 
 
-
-# Visualization for each checkpoint
-for i, ck in enumerate(check_points):
-    plt.figure(figsize=(6, 6))
-    plt.plot([T[ck-1]], [Z_e[i]], label='Euler Forward', marker='o', linestyle='')
-    plt.plot([T[ck-1]], [Z_t[i]], label='Trapezoidal', marker='x', linestyle='')
-    plt.xlabel('Time')
-    plt.ylabel('Log Marginal Likelihood')
-    plt.title(f'Model Comparison at Time {T[ck-1]}')
-    plt.legend()
-    plt.show()
-#graphing
-#for i, ck in enumerate(check_points):
-    #plt.figure(figsize=(6, 6))
-    #plt.pie([Z_e[i], Z_t[i]], labels=['Euler Forward', 'Trapezoidal'], colors=['red', 'blue'], autopct='%1.1f%%')
-    #plt.title(f'Model Comparison at Time {T[ck-1]}')
-   # plt.show()
