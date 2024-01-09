@@ -101,7 +101,7 @@ def trapezoidal_method(gammas, k, y, t, h):
 def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_y, sigma_yp):
     """
     Computes the combined log-likelihood of the observed position and velocity data for a given simulated dataset.
-
+    And since we are intrest both
     Inputs:
         simulated: Array, the simulated data from the model.
         observed_y: Array, observed data for position (y).
@@ -113,20 +113,18 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_
         log_likelihood: Float, the combined log-likelihood value of the observed data given the simulated model outputs.
 
     """
-    ll_y = np.zeros(len(simulated))
-    ll_yp = np.zeros(len(simulated))
+    ll = np.zeros(simulated.shape[0])
 
-    for i in range(len(simulated)):
-        residuals_y = observed_y - simulated[i, :, 0]
-        residuals_yp = observed_yp - simulated[i, :, 1]
+    for i in range(simulated.shape[0]):
+        residuals_y = observed_y - simulated[i,  0]
+        residuals_yp = observed_yp - simulated[i, 1]
 
-        lly = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
-        llyp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
+        ll_y = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
+        ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
 
-        ll_y[i] = lly
-        ll_yp[i] = llyp
+        ll[i] = ll_y + ll_yp
 
-    return ll_y, ll_yp
+    return ll
 
 def HM_FindZ(log_likelihood, N):
     """
@@ -151,12 +149,12 @@ def HM_FindZ(log_likelihood, N):
            
         """
    
-    #unlog the log_likehood
-    likelihood = np.exp(log_likelihood)
+    log_Zhat = scipy.special.logsumexp(-log_likelihood) - np.log(N)
+    print('debug=',log_Zhat)
     
-    #calculate Zhat
-    Zhat = 1/((np.sum(1/likelihood))/N)
-    
+    # Exponentiate to get Zhat, if necessary. Otherwise, return log_Zhat based on use case.
+    Zhat = np.exp(log_Zhat)
+
     return Zhat
 
 def RIS_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, initial_conditions, T, k):
@@ -180,18 +178,17 @@ def RIS_marginal_likelihood(method, gammas, observed_y, observed_yp, sigma_y, si
     """
     results = []
     data = np.zeros((len(gammas), len(T), 2))
-    data[:, 0, 0] = initial_conditions[0]  
-    data[:, 0, 1] = initial_conditions[1] 
+    data[:, 0, :] = initial_conditions 
 
     for i, t in enumerate(T[1:], start=1): 
         h = t - T[i - 1]
         data[:, i, :] = method(gammas, k, data[:, i - 1, :], t, h)
-        log_likelihood_y, log_likelihood_yp = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
-        Z_y = HM_FindZ(log_likelihood_y, len(gammas))
-        Z_yp = HM_FindZ(log_likelihood_yp, len(gammas))
-        results.append([Z_y, Z_yp])
+        combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        Z = HM_FindZ(combined_log_likelihood, len(gammas))
+        results.append(Z)
 
     return results, data
+
 # Parameters 
 m = 1
 k = 0.5
@@ -212,7 +209,16 @@ gamma = 0.1
 observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0,100], N, noise_level_s, noise_level_j)
 
 # Compute marginal likelihoods for each method
-Z_e,data_e = Z_t,data_t = RIS_marginal_likelihood(euler_forward, gammas, observed_y, observed_yp, sigma_y, sigma_yp, initial_conditions, T, k)
+Z_e,data_e = RIS_marginal_likelihood(euler_forward, gammas, observed_y, observed_yp, sigma_y, sigma_yp, initial_conditions, T, k)
+#print("Z_e = ",Z_e)
 Z_t,data_t = RIS_marginal_likelihood(trapezoidal_method, gammas, observed_y, observed_yp, sigma_y, sigma_yp, initial_conditions, T, k)
+#print("Z_t = ",Z_t)
 
-
+#graphing
+plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"])
+    
+plt.annotate('Red is Z_e', xy=(-1.1,0.8))
+plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
+plt.title('Z_t,Z_e')
+plt.tight_layout()
+plt.show() 
