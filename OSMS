@@ -149,7 +149,7 @@ def HM_FindZ(log_likelihood, N):
            
         """
    
-    log_Zhat = scipy.special.logsumexp(-log_likelihood) - np.log(N)
+    log_Zhat = scipy.special.logsumexp(log_likelihood) /N
     print('debug=',log_Zhat)
     
     # Exponentiate to get Zhat, if necessary. Otherwise, return log_Zhat based on use case.
