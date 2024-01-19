@@ -174,15 +174,16 @@ def Saved_DATA(method, gammas, initial_conditions, T, k):
     
     data = np.zeros((len(gammas), len(T), 2))
     data[:, 0, :] = initial_conditions 
-
+    #ll = np.zeros( len(T))
+    
     for i, t in enumerate(T[1:], start=1): 
         h = t - T[i - 1]
         data[:, i, :] = method(gammas, k, data[:, i - 1, :], t, h)
-        
-        
+        #combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        #ll[i]=combined_log_likelihood
 
-    return  data
-def Alphapass_find_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp):
+    return  data #，ll
+def Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp):
     """
     Computes the marginal likelihood estimates (Z) for specified checkpoints with data saved.
     
@@ -233,8 +234,8 @@ if __name__ == '__main__':
     data_t = Saved_DATA(trapezoidal_method, gammas, initial_conditions, T, k)
     #print("Z_t = ",Z_t)
     
-    Z_e = Alphapass_find_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    Z_t = Alphapass_find_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_e = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
     #graphing
     plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"])
         
