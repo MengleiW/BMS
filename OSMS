@@ -230,25 +230,31 @@ def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sig
     # Assuming you want to use this index to start further calculations
     for i in range(Timepoint_of_interest, N):
         combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
-        print('debug=',combined_log_likelihood)
-        log_Zhat = np.log(Zhat)
-        log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
-        Zhat = np.exp(log_Zhat)
-        results.append(Zhat)
+        if i % 5 == 0:
+            Zhat = HM_FindZ(combined_log_likelihood, len(gammas))
+            results.append(Zhat)
+        else:
+            
+            log_Zhat = np.log(Zhat)
+            log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
+            Zhat = np.exp(log_Zhat)
+            results.append(Zhat)
 
     return results  
         
 if __name__ == '__main__':   
+    
+    #print('debug=',combined_log_likelihood)
     # Parameters 
     m = 1
     k = 0.5
     initial_conditions = [1, 0]
     gammas = np.linspace(0, 1, 10)
     T = np.linspace(0, 100, 100)
-    check_points = [1,5,8]
+    check_points = [10,50,80]
     
     Timepoint_of_interest=2
-    N = 10 
+    N = 100 
     sigma_y = 0.3 
     sigma_yp = 0.1
     noise_level_s = 0.0001
@@ -274,9 +280,21 @@ if __name__ == '__main__':
     print("Length of Z_e:", len(Z_e))
     print("Z_t contents:", Z_t)
     print("Length of Z_t:", len(Z_t))
+    
     #graphing
-    plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"])
-        
+    checkpoints = list(range(1, len(Z_e) + 1))  # Assuming checkpoints are simply ordered from 1 to N
+
+    plt.plot(checkpoints, Z_e, label='Z_e', marker='o')  # Plot Z_e with checkpoints
+    plt.plot(checkpoints, Z_t, label='Z_t', marker='x')  # Plot Z_t with checkpoints
+    
+    plt.xlabel('Checkpoints')
+    plt.ylabel('Values')
+    plt.title('Line Plot of Z_e and Z_t over Checkpoints')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+    
+    plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"])  
     plt.annotate('Red is Z_e', xy=(-1.1,0.8))
     plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
     plt.title('Z_t,Z_e')
