@@ -153,7 +153,7 @@ def HM_FindZ(log_likelihood, N):
     
     
     # Exponentiate to get Zhat, if necessary. Otherwise, return log_Zhat based on use case.
-    Zhat = np.exp(log_Zhat)
+    Zhat = 1/np.exp(log_Zhat)
 
     return Zhat
 
@@ -201,7 +201,7 @@ def Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp
     """
         
     results = []
-    for i in check_points:
+    for i in range(N):#check_points:
         combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
         Z = HM_FindZ(combined_log_likelihood, len(gammas))
         results.append(Z)
@@ -230,15 +230,15 @@ def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sig
     # Assuming you want to use this index to start further calculations
     for i in range(Timepoint_of_interest, N):
         combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
-        if i % 5 == 0:
-            Zhat = HM_FindZ(combined_log_likelihood, len(gammas))
-            results.append(Zhat)
-        else:
+        #if i % 5 == 0:
+            #Zhat = HM_FindZ(combined_log_likelihood, len(gammas))
+            #results.append(Zhat)
+        #else:
             
-            log_Zhat = np.log(Zhat)
-            log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
-            Zhat = np.exp(log_Zhat)
-            results.append(Zhat)
+        log_Zhat = np.log(Zhat)
+        log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
+        Zhat = 1/np.exp(log_Zhat)
+        results.append(Zhat)
 
     return results  
         
@@ -250,11 +250,11 @@ if __name__ == '__main__':
     k = 0.5
     initial_conditions = [1, 0]
     gammas = np.linspace(0, 1, 10)
-    T = np.linspace(0, 100, 100)
+    T = np.linspace(0, 10, 100)
     check_points = [10,50,80]
     
     Timepoint_of_interest=2
-    N = 100 
+    N = 100
     sigma_y = 0.3 
     sigma_yp = 0.1
     noise_level_s = 0.0001
@@ -270,10 +270,10 @@ if __name__ == '__main__':
     data_t = Saved_DATA(trapezoidal_method, gammas, initial_conditions, T, k)
     #print("Z_t = ",Z_t)
     
-    #Z_e = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    #Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    Z_e = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    Z_t = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_e = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    #Z_e = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    #Z_t = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
     
     
     print("Z_e contents:", Z_e)
@@ -282,10 +282,11 @@ if __name__ == '__main__':
     print("Length of Z_t:", len(Z_t))
     
     #graphing
-    checkpoints = list(range(1, len(Z_e) + 1))  # Assuming checkpoints are simply ordered from 1 to N
+    #checkpoints = list(range(1, len(Z_e) + 1)) 
+    checkpoints = list(range(N))
 
-    plt.plot(checkpoints, Z_e, label='Z_e', marker='o')  # Plot Z_e with checkpoints
-    plt.plot(checkpoints, Z_t, label='Z_t', marker='x')  # Plot Z_t with checkpoints
+    plt.plot(checkpoints, Z_e, label='Z_e', marker='o')  
+    plt.plot(checkpoints, Z_t, label='Z_t', marker='x')  
     
     plt.xlabel('Checkpoints')
     plt.ylabel('Values')
