@@ -246,7 +246,7 @@ def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sig
         
 
 
-def Metropolis_hasting(M,target_function,proposal_function ):
+def Metropolis_hasting(M,log_target_function,gamma,k,proposal_std):
     """
     Description: Use the Metropolis-Hastings sampler to generate a sample from a Rayleigh distribution.
 
@@ -262,7 +262,7 @@ def Metropolis_hasting(M,target_function,proposal_function ):
     Outputs:
    
          Theta1: Sample gathered from the target distribution.
-         Theta2: Sample gathers from the target distribution.
+         
        
        
      Modified:
@@ -271,35 +271,26 @@ def Metropolis_hasting(M,target_function,proposal_function ):
     """ 
 
     #Set empty parameters
-    theta = []
-    X_t = np.ones(M)
+    theta = np.zeros((M, len(np.array([gamma,k]))))
+    current_params = np.array([gamma,k])
+    current_log_prob = log_target_function(*current_params)
     
-    #if proposal_function == 'Gaussian':
-        #proposal_function = x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.1)
+    
 
     for i in range(M):
-        # Propose a new state from multivariate distribution 
-        Y = proposal_function(X_t)
-        #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
-        r = target_function(Y)/target_function(X_t) #* weights
-       # print('r=',r)
-        
-        alpha = np.minimum(1, r)
-        #print('alpha=',alpha)
-        
-        if np.random.random() < alpha:
-            X_t = Y
-            theta.append(Y)
-            
-        else:
-            
-            theta.append(X_t[M])
+        proposed_params = current_params + np.random.normal(0, proposal_std, size=current_params.shape)
+        proposed_log_prob = log_target_function(*proposed_params)
            
-    theta = np.array([arr.flatten() for arr in theta])
+        accept_log_prob = proposed_log_prob - current_log_prob
+        if np.log(np.random.rand()) < accept_log_prob:
+            current_params = proposed_params
+            current_log_prob = proposed_log_prob
+        
+        theta[i] = current_params
     
     return theta
 
-def proposal_l(method, gammas, initial_conditions, T, k):
+def log_target_function(method, gammas, initial_conditions, T, k):
     """
     Simulates and saves data for a range of parameter values over specified time points using a numerical method.
 
@@ -321,7 +312,7 @@ def proposal_l(method, gammas, initial_conditions, T, k):
     for i, t in enumerate(T[1:], start=1): 
         h = t - T[i - 1]
         data[ i, :] = method(gammas, k, data[ i - 1, :], t, h)
-        combined_log_likelihood = calculate_combined_log_likelihood(data[ i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        combined_log_likelihood = calculate_combined_log_likelihood(data[i, :], observed_y, observed_yp, sigma_y, sigma_yp)
         ll[i]=combined_log_likelihood
     return  data, ll
 
