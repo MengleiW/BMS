@@ -39,7 +39,7 @@ def gauss_log_likelihood(y, sigma):
     
     return ll
 def Metropolis_hasting(weights,M,m,target_function,proposal_function ):#= 'Gaussian'):
-   """
+    """
     Description: Use the Metropolis-Hastings sampler to generate a sample from a Rayleigh distribution.
 
     Inputs:
@@ -100,7 +100,7 @@ def Metropolis_hasting(weights,M,m,target_function,proposal_function ):#= 'Gauss
     
     
 def Umbrella_sampling (NS,data, sigma ,target_function, proposal_function ):   
-       """
+    """
     Description: To compare models using a normalizing constant ratio approximated by Multi-stage(M stage) umbrella sampling. 
     Drawing sample using MCMC Metropolis-Hastings sampler
 
@@ -126,11 +126,9 @@ def Umbrella_sampling (NS,data, sigma ,target_function, proposal_function ):
         Modified:
        
             11/8/2023 (Menglei Wang)
-           
-        """
-
-    
-    #extrac data
+        
+    """
+    #extract data
     y1 = data['model01']['y']
     y2 = data['model02']['y']
     tht2 = data['model02']['tht']
