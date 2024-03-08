@@ -2,7 +2,7 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 #import math
-#import pymc3 as pm
+import pymc as pm
 #import theano.tensor as tt
 
 
