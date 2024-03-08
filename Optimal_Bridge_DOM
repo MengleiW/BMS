@@ -19,7 +19,7 @@ def Metropolis_hasting(M,m,target_function,proposal_function ):
     #Set empty parameters
     theta = []
     
-    X_t = np.ones(m)
+    X_t = np.zeres(m)
     
     #if proposal_function == 'Gaussian':
         #proposal_function = x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.1)
@@ -42,7 +42,7 @@ def Metropolis_hasting(M,m,target_function,proposal_function ):
         theta= np.array(theta)
     return theta
 
-def target_function(method,gammas, k, y, t, h, observed_y, observed_yp, sigma_y, sigma_yp):
+def target_function(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp):
     """
     Simulates and saves data for a range of parameter values over specified time points using a numerical method.
 
@@ -52,7 +52,7 @@ def target_function(method,gammas, k, y, t, h, observed_y, observed_yp, sigma_y,
         initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
         T: Array, time points for which the data is to be simulated.
         k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
-        h: Float, time step.
+        
         observed_y: Array, observed data for position (y).
         observed_yp: Array, observed data for velocity (y').
         sigma_y: Standard deviation of error in position measurements.
@@ -62,13 +62,19 @@ def target_function(method,gammas, k, y, t, h, observed_y, observed_yp, sigma_y,
     Outputs:
         target_function:  where each element contains the simulated system states for each value of gamma at given time point.
     """
-    simulated_data = method(gammas, k, y, t, h)
+    simulated_data = np.zeros((len(T),2))
+    simulated_data[0,:] = initial_conditions
+    
+    for i, t in enumerate(T[1:], start=1): 
+        h = t - T[i - 1]
+        simulated_data [i,:] = method(gammas, k, simulated_data[i - 1,:], t, h)
+        
     ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
     target_function = np.sum(ll)
     return  target_function
 
 
-def OptimalBridge (method,k, y, t, h, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest):
+def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest):
     
     """
     Optimal Bridge Sampling uses Metropolis-Hasting aproximate Z and iteratively updates the aproximation.
@@ -100,7 +106,7 @@ def OptimalBridge (method,k, y, t, h, data,N,N1,N2, check_points,gammas, observe
     Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
     
     
-    target_function_Post =  target_function(gammas, k, y, t, h, observed_y, observed_yp, sigma_y, sigma_yp)/number_of_gammas
+    target_function_Post =  target_function(method, gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)/number_of_gammas
     proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
     target_function_phat = lambda x : scipy.stats.multivariate_normal.logpdf(x, cov=np.eye(len(x)) * 0.3)
     proposal_function_phat  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.3)
@@ -111,12 +117,12 @@ def OptimalBridge (method,k, y, t, h, data,N,N1,N2, check_points,gammas, observe
          
          
          #Finding Q11
-         q11 =  target_function(method,tht1, k, y, t, h, observed_y, observed_yp, sigma_y, sigma_yp)#[]
+         q11 =  target_function(method,tht1,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
          #print('l1=',likelihood1)
          
          
          #Finding Q12
-         q12 = target_function(method,tht2, k, y, t, h, observed_y, observed_yp, sigma_y, sigma_yp)
+         q12 = target_function(method,tht2, initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)
          #print('q12=',q12)
          
          #Finding Q21
