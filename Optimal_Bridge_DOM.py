@@ -67,8 +67,12 @@ def euler_forward(gammas, k, y, t, h):
     Outputs:
       y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
-
+    print(gammas)
+    print('y=',y)
+    print(type(y))
     for i, gamma in enumerate(gammas):
+        #print('i=',i)
+        #print('gamma=',gamma)
         print(y[i,:])
         y[i,:] += h * np.array(damped_oscillator(t, y[i, :], gamma, k)) 
         
