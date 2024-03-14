@@ -2,7 +2,7 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 #import math
-import pymc as pm
+#import pymc3 as pm
 #import theano.tensor as tt
 
 
@@ -53,52 +53,49 @@ def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, n
     
     return y, yp
 
-def euler_forward(gammas, k, y, t, h):
+def euler_forward(gammas, k,  T):
     """
     Numerically approximates the solution of the damped oscillator using the Euler forward method for a single time point.
 
     Inputs:
       gammas: Array, range of damping coefficients.
       k: Float, stiffness coefficient.
-      y: 2D Array, initial states of the system for each gamma (position and velocity).
-      t: Float, single time point.
-      h: Float, time step.
+      y0: 2D Array, initial states of the system for each gamma (position and velocity).
+      T: Float, Time point.
+      
 
     Outputs:
       y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
-    print(gammas)
-    print('y=',y)
-    print(type(y))
-    for i, gamma in enumerate(gammas):
-        #print('i=',i)
-        #print('gamma=',gamma)
-        print(y[i,:])
-        y[i,:] += h * np.array(damped_oscillator(t, y[i, :], gamma, k)) 
-        
+
+    y = np.zeros((len(T), 2)) 
+    for i, t in enumerate(T[:-1]):
+        h = t - T[i - 1]
+        y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gamma, k))
 
     return y
 
-def trapezoidal_method(gammas, k, y, t, h):
+def trapezoidal_method(gammas, k,  T):
     """
     Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
 
     Inputs:
       gammas: Array, range of damping coefficients.
       k: Float, stiffness coefficient.
-      y: 2D Array, initial states of the system for each gamma (position and velocity).
-      t: Float, single time point.
-      h: Float, time step.
+      initial_conditions: 2D Array, initial states of the system for each gamma (position and velocity).
+      T: Float, Time points.
+      
 
     Outputs:
       y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
-    for i, gamma in enumerate(gammas):
+    y = np.zeros((len(T), 2))
+    for i, t in enumerate(T[:-1]):
+        h = t - T[i - 1]
         f_n = np.array(damped_oscillator(t, y[i, :], gamma, k))
         y_pred = y[i, :] + h * f_n
         f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gamma, k))
-        y[i, :] = y[i, :] + h/2 * (f_n + f_n_plus_1)  
-         
+        y[i + 1, :] = y[i, :] + h / 2 * (f_n + f_n_plus_1)
 
     return y
 
@@ -177,13 +174,13 @@ def Saved_DATA(method, gammas, initial_conditions, T, k):
         data: 3D Array, where each element contains the simulated system states for each value of gamma at each time point.
     """
     
-    data = np.zeros((len(gammas), len(T), 2))
+    data = np.zeros((len(T),len(gammas), 2))
     data[:, 0, :] = initial_conditions 
-    #ll = np.zeros( len(T))
+    #ll = np.zeros(len(T))
     
-    for i, t in enumerate(T[1:], start=1): 
-        h = t - T[i - 1]
-        data[:, i, :] = method(gammas, k, data[:, i - 1, :], t, h)
+    for i, gamma in enumerate(gammas): 
+        
+        data[:, i, :] = method(gammas, k, T)
         #combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
         #ll[i]=combined_log_likelihood
 
@@ -252,7 +249,7 @@ def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sig
         
 
 
-def Metropolis_hasting(M,m,target_function,proposal_function ):
+def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,M,m,target_function,proposal_function ):
     """
     Metropolis-Hasting algorithm for sampling from a target distribution.
 
@@ -273,7 +270,7 @@ def Metropolis_hasting(M,m,target_function,proposal_function ):
     #Set empty parameters
     theta = []
     
-    X_t = np.zeres(m)
+    X_t = np.zeros(m)
     
     #if proposal_function == 'Gaussian':
         #proposal_function = x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.1)
@@ -283,7 +280,7 @@ def Metropolis_hasting(M,m,target_function,proposal_function ):
         Y = proposal_function(X_t)
         
         #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
-        r = target_function(Y)/target_function(X_t) #* weights
+        r = np.exp(target_function(method,Y,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)-target_function(method,X_t,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)) #* weights
        # print('r=',r)
         
         alpha = np.minimum(1, r)
@@ -316,19 +313,19 @@ def target_function(method,gammas,initial_conditions,T, k, observed_y, observed_
     Outputs:
         target_function:  where each element contains the simulated system states for each value of gamma at given time point.
     """
-    simulated_data = np.zeros((len(T),2))
-    simulated_data[0,:] = initial_conditions
+    simulated_data = np.zeros((len(T),len(gammas),  2))
+    simulated_data[:, 0, :] = initial_conditions 
     
-    for i, t in enumerate(T[1:], start=1): 
-        h = t - T[i - 1]
-        simulated_data [i,:] = method(gammas, k, simulated_data[i - 1,:], t, h)
+    for i, gamma in enumerate(gammas): 
         
-    ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
+        simulated_data[:,i, :] = method(gammas, k, T)
+        
+    ll = calculate_combined_log_likelihood(simulated_data[:, - 1, :], observed_y, observed_yp, sigma_y, sigma_yp)
     target_function = np.sum(ll)
     return  target_function
 
 
-def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest):
+def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space):
     
     """
     Optimal Bridge Sampling uses Metropolis-Hasting aproximate Z and iteratively updates the aproximation.
@@ -366,8 +363,8 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
     proposal_function_phat  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.3)
     for i in range (N-1):
          #Taking sampling using Metropolis Hasting algrithm. 
-         tht2 = Metropolis_hasting(N,target_function_Post,proposal_function_Post )
-         tht1 = Metropolis_hasting(N,target_function_phat,proposal_function_phat )
+         tht2 = Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_Post,proposal_function_Post )
+         tht1 = Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat )
          
          
          #Finding Q11
@@ -409,7 +406,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
 
     return Z
 
-#def intergrate_LL ():
+#print("error_check = ",y[i, :])
     
     
 if __name__ == '__main__':   
@@ -420,6 +417,7 @@ if __name__ == '__main__':
     k = 0.5
     initial_conditions = [1, 0]
     number_of_gammas = 10
+    Dimention_of_parameter_space = 1 
     gammas = np.linspace(0, 1, 10)
     T = np.linspace(0, 10, 100)
     check_points = [10,50,80]
@@ -447,8 +445,8 @@ if __name__ == '__main__':
     #Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
     #Z_e = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
     #Z_t = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    Z_e = OptimalBridge (euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    Z_t = OptimalBridge (trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_e = OptimalBridge (euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    Z_t = OptimalBridge (trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
     
     print("Z_e contents:", Z_e)
     print("Length of Z_e:", len(Z_e))
