@@ -53,54 +53,48 @@ def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, n
     
     return y, yp
 
-def euler_forward(gammas, k, y0, T):
+def euler_forward(gammas, k, y, t, h):
     """
     Numerically approximates the solution of the damped oscillator using the Euler forward method for a single time point.
 
     Inputs:
       gammas: Array, range of damping coefficients.
       k: Float, stiffness coefficient.
-      y0: 2D Array, initial states of the system for each gamma (position and velocity).
-      T: Float, Time point.
-      
+      y: 2D Array, initial states of the system for each gamma (position and velocity).
+      t: Float, single time point.
+      h: Float, time step.
 
     Outputs:
       y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
 
-    y = np.zeros((len(T), 2))
-    y[0, :] = y0
-    h = T[1]-T[0]
-    for i, t in enumerate(T[:-1]):
+    for i, gamma in enumerate(gammas):
+        y[i,:] += h * np.array(damped_oscillator(t, y[i, :], gamma, k)) 
         
-        
-        y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gamma, k))
-        
+
     return y
 
-def trapezoidal_method(gammas, k, y0, T):
+def trapezoidal_method(gammas, k, y, t, h):
     """
     Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
 
     Inputs:
       gammas: Array, range of damping coefficients.
       k: Float, stiffness coefficient.
-      initial_conditions: 2D Array, initial states of the system for each gamma (position and velocity).
-      T: Float, Time points.
-      
+      y: 2D Array, initial states of the system for each gamma (position and velocity).
+      t: Float, single time point.
+      h: Float, time step.
 
     Outputs:
       y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
-    y = np.zeros((len(T), 2))
-    y[0, :] = y0
-    h = T[1]-T[0]
-    for i, t in enumerate(T[:-1]):
-        
+    for i, gamma in enumerate(gammas):
+        #print(y[i, :])
         f_n = np.array(damped_oscillator(t, y[i, :], gamma, k))
         y_pred = y[i, :] + h * f_n
         f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gamma, k))
-        y[i + 1, :] = y[i, :] + h / 2 * (f_n + f_n_plus_1)
+        y[i, :] = y[i, :] + h/2 * (f_n + f_n_plus_1)  
+         
 
     return y
 
@@ -174,22 +168,22 @@ def Saved_DATA(method, gammas, initial_conditions, T, k):
         initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
         T: Array, time points for which the data is to be simulated.
         k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
-        
+
     Outputs:
         data: 3D Array, where each element contains the simulated system states for each value of gamma at each time point.
     """
     
-    data = np.zeros((len(T),len(gammas), 2))
+    data = np.zeros((len(gammas), len(T), 2))
     data[:, 0, :] = initial_conditions 
+    #ll = np.zeros( len(T))
     
-    #ll = np.zeros(len(T))
-    
-    for i, gamma in enumerate(gammas): 
-        data[:, i, :] = method(gammas, k,initial_conditions, T)
+    for i, t in enumerate(T[1:], start=1): 
+        h = t - T[i - 1]
+        data[:, i, :] = method(gammas, k, data[:, i - 1, :], t, h)
         #combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
         #ll[i]=combined_log_likelihood
-        
-    return  data#, ll
+
+    return  data #，ll
 def Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp):
     """
     Computes the marginal likelihood estimates (Z) for specified checkpoints with data saved.
@@ -214,8 +208,6 @@ def Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp
         results.append(Z)
     
     return results 
-
-
 def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest):
     """
     Computes the marginal likelihood estimates (Z) using P(y_{t+1},...,y_1|M) = P(y_{t+1}|y_t,...,y_1,M)P(M | y_t,...,y_1)
@@ -239,6 +231,7 @@ def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sig
     # Assuming you want to use this index to start further calculations
     for i in range(Timepoint_of_interest, N):
         combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        
         #if i % 5 == 0:
             #Zhat = HM_FindZ(combined_log_likelihood, len(gammas))
             #results.append(Zhat)
@@ -246,177 +239,13 @@ def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sig
             
         log_Zhat = np.log(Zhat)
         #log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
-        Zhat = log_Zhat + np.sum(np.exp(combined_log_likelihood))*(gammas[1] - gammas[0])
-        #Zhat = 1/np.exp(log_Zhat)
+        
+        log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood)+(gammas[1] - gammas[0])
+        Zhat = 1/np.exp(log_Zhat)                         
         results.append(Zhat)
 
     return results  
         
-
-
-def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,M,m,target_function,proposal_function ):
-    """
-    Metropolis-Hasting algorithm for sampling from a target distribution.
-
-    Parameters:
-    - M: Number of samples to generate.
-    - m: The dimension of the parameter space.
-    - target_function: Function to compute the log-likelihood of a state.
-    - proposal_function: Function to propose a new state given the current state.
-
-    Returns:
-    - A list of sampled states from the target distribution.
-       
-     Modified:
-   
-         11/09/2023 (Menglei Wang)
-    """ 
-
-    #Set empty parameters
-    theta = []
-    
-    X_t = np.zeros(m)
-    
-    #if proposal_function == 'Gaussian':
-        #proposal_function = x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.1)
-
-    for i in range(M):
-        # Propose a new state from multivariate distribution 
-        Y = proposal_function(X_t)
-        print("y=",Y)
-        print(target_function(method,Y,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp))
-        print(target_function(method,X_t,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp))
-        #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
-        r = np.exp(target_function(method,Y,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)-target_function(method,X_t,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)) #* weights
-       # print('r=',r)
-        
-        alpha = np.minimum(1, r)
-        #print('alpha=',alpha)yh
-        
-        if np.random.random() < alpha:
-            X_t = Y
-            
-        theta.append(X_t)
-        theta= np.array(theta)
-    return theta
-
-def target_function(method,gamma,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp):
-    """
-    Simulates and saves data for a range of parameter values over specified time points using a numerical method.
-
-    Inputs:
-        method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
-        gamma: The parameter values (e.g., damping coefficients) to be tested.
-        initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
-        T: Array, time points for which the data is to be simulated.
-        k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
-        
-        observed_y: Array, observed data for position (y).
-        observed_yp: Array, observed data for velocity (y').
-        sigma_y: Standard deviation of error in position measurements.
-        sigma_yp: Standard deviation of error in velocity measurements.
-        
-        
-    Outputs:
-        target_function:  where each element contains the simulated system states for each value of gamma at given time point.
-    """
-  
-       
-    simulated_data = method(gamma, k,initial_conditions, T)
-    print("data=",simulated_data)
-    ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
-    
-    target_function = np.sum(ll)
-    print("tf=",target_function)
-    return  target_function
-
-
-def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space):
-    
-    """
-    Optimal Bridge Sampling uses Metropolis-Hasting aproximate Z and iteratively updates the aproximation.
-
-    Inputs:
-        method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
-        gammas: Array, range of parameter values (e.g., damping coefficients) to be tested.
-        initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
-        T: Array, time points for which the data is to be simulated.
-        k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
-        h: Float, time step.
-        observed_y: Array, observed data for position (y).
-        observed_yp: Array, observed data for velocity (y').
-        sigma_y: Standard deviation of error in position measurements.
-        sigma_yp: Standard deviation of error in velocity measurements.
-       
-    Outputs:
-   
-         Rhat: (0,0) The ratio between Z1 and Z2
-
-       
-       
-     Modified:
-   
-         10/07/2023 (Menglei Wang)
-           
-    """
-    Z = []
-    Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
-    
-    
-    target_function_Post =  target_function(method, gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)/number_of_gammas
-    proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
-    target_function_phat = lambda x : scipy.stats.multivariate_normal.logpdf(x, cov=np.eye(len(x)) * 0.3)
-    proposal_function_phat  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.3)
-    for i in range (N-1):
-        
-         
-         #Taking sampling using Metropolis Hasting algrithm. 
-         tht2 = Metropolis_hasting(method,gammas,initial_conditions,i, k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_Post,proposal_function_Post )
-         tht1 = Metropolis_hasting(method,gammas,initial_conditions,i, k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat )
-         
-         
-         #Finding Q11
-         q11 =  target_function(method,tht1,initial_conditions,i, k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
-         #print('l1=',likelihood1)
-         
-         
-         #Finding Q12
-         q12 = target_function(method,tht2, initial_conditions,i, k, observed_y, observed_yp, sigma_y, sigma_yp)
-         #print('q12=',q12)
-         
-         #Finding Q21
-         q21 = scipy.stats.multivariate_normal.logpdf(tht1, cov=np.eye(len(tht1)) * 0.3)
-         #print('q21=',q21)
-        
-         #Finding Q22
-        
-         q22 = scipy.stats.multivariate_normal.logpdf(tht2, cov=np.eye(len(tht2)) * 0.3)
-         #print('l2=',likelihood2)
-        
-         #epsilon = 1e-10
-         #q11 = np.maximum(q11, epsilon)
-         #q12 = np.maximum(q12, epsilon)
-         #q21 = np.maximum(q21, epsilon)
-         #q22 = np.maximum(q22, epsilon)
-         
-         
-         Q1 = np.logaddexp.reduce(np.log(q11)) - np.logaddexp.reduce(np.log(N1*q11 + N2*Zhat*q21))+N1
-         Q2 = np.logaddexp.reduce(np.log(q22)) - np.logaddexp.reduce(np.log(N1*q12 + N2*Zhat*q22))+N2
-         print('Q1=',Q1)
-         print('Q2=',Q2)
-         
-         
-         
-         
-         
-         zhat = np.exp(Q1 - Q2)
-         Z.append(zhat*Z)
-
-    return Z
-
-#print("error_check = ",y[i, :])
-    
-    
 if __name__ == '__main__':   
     
     #print('debug=',combined_log_likelihood)
@@ -424,16 +253,12 @@ if __name__ == '__main__':
     m = 1
     k = 0.5
     initial_conditions = [1, 0]
-    number_of_gammas = 10
-    Dimention_of_parameter_space = 1
     gammas = np.linspace(0, 1, 10)
-    T = np.linspace(0, 10, 10)
-    check_points = [1,5,8]
+    T = np.linspace(0, 10, 100)
+    check_points = [2,11,18]
     
     Timepoint_of_interest=0
-    N = 10
-    N1 = 10
-    N2 = 10
+    N = 20
     sigma_y = 0.3 
     sigma_yp = 0.1
     noise_level_s = 0.0001
@@ -445,16 +270,15 @@ if __name__ == '__main__':
     
     # Compute marginal likelihoods for each method
     data_e = Saved_DATA(euler_forward, gammas, initial_conditions, T, k) 
-    #print("Z_e = ",Z_e)
+    #print("Z_e = ", data_e[:,:,1])
     data_t = Saved_DATA(trapezoidal_method, gammas, initial_conditions, T, k)
     #print("Z_t = ",Z_t)
     
-    #Z_e = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    #Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_e = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
     #Z_e = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
     #Z_t = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    Z_e = OptimalBridge (euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    Z_t = OptimalBridge (trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    
     
     print("Z_e contents:", Z_e)
     print("Length of Z_e:", len(Z_e))
@@ -475,7 +299,7 @@ if __name__ == '__main__':
     plt.grid(True)
     plt.show()
     
-    plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"])  
+    plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"], autopct='%1.1f%%')  
     plt.annotate('Red is Z_e', xy=(-1.1,0.8))
     plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
     plt.title('Z_t,Z_e')
