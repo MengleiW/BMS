@@ -53,7 +53,7 @@ def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, n
     
     return y, yp
 
-def euler_forward(gammas, k,  T):
+def euler_forward(gammas, k, y0, T):
     """
     Numerically approximates the solution of the damped oscillator using the Euler forward method for a single time point.
 
@@ -68,14 +68,17 @@ def euler_forward(gammas, k,  T):
       y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
 
-    y = np.zeros((len(T), 2)) 
+    y = np.zeros((len(T), 2))
+    y[0, :] = y0
+    h = T[1]-T[0]
     for i, t in enumerate(T[:-1]):
-        h = t - T[i - 1]
+        
+        
         y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gamma, k))
-
+        
     return y
 
-def trapezoidal_method(gammas, k,  T):
+def trapezoidal_method(gammas, k, y0, T):
     """
     Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
 
@@ -90,8 +93,10 @@ def trapezoidal_method(gammas, k,  T):
       y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
     y = np.zeros((len(T), 2))
+    y[0, :] = y0
+    h = T[1]-T[0]
     for i, t in enumerate(T[:-1]):
-        h = t - T[i - 1]
+        
         f_n = np.array(damped_oscillator(t, y[i, :], gamma, k))
         y_pred = y[i, :] + h * f_n
         f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gamma, k))
@@ -176,14 +181,14 @@ def Saved_DATA(method, gammas, initial_conditions, T, k):
     
     data = np.zeros((len(T),len(gammas), 2))
     data[:, 0, :] = initial_conditions 
+    
     #ll = np.zeros(len(T))
     
     for i, gamma in enumerate(gammas): 
-        
-        data[:, i, :] = method(gammas, k, T)
+        data[:, i, :] = method(gammas, k,initial_conditions, T)
         #combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
         #ll[i]=combined_log_likelihood
-
+        
     return  data#, ll
 def Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp):
     """
@@ -249,15 +254,15 @@ def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sig
         
 
 
-def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,M,m,target_function,proposal_function ):
+def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,M,m,target_Function,proposal_Function ):
     """
     Metropolis-Hasting algorithm for sampling from a target distribution.
 
     Parameters:
     - M: Number of samples to generate.
     - m: The dimension of the parameter space.
-    - target_function: Function to compute the log-likelihood of a state.
-    - proposal_function: Function to propose a new state given the current state.
+    - target_Function: Function to compute the log-likelihood of a state.
+    - proposal_Function: Function to propose a new state given the current state.
 
     Returns:
     - A list of sampled states from the target distribution.
@@ -277,10 +282,12 @@ def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observ
 
     for i in range(M):
         # Propose a new state from multivariate distribution 
-        Y = proposal_function(X_t)
-        
+        Y = proposal_Function(X_t)
+        print("y=",Y)
+        print(target_Function(method,Y,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp))
+        print(target_Function(method,X_t,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp))
         #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
-        r = np.exp(target_function(method,Y,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)-target_function(method,X_t,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)) #* weights
+        r = np.exp(target_Function(method,Y,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)-target_Function(method,X_t,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)) #* weights
        # print('r=',r)
         
         alpha = np.minimum(1, r)
@@ -293,13 +300,13 @@ def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observ
         theta= np.array(theta)
     return theta
 
-def target_function(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp):
+def target_function(method,gamma,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp):
     """
     Simulates and saves data for a range of parameter values over specified time points using a numerical method.
 
-    Inputs:
+    Inputs:y
         method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
-        gammas: Array, range of parameter values (e.g., damping coefficients) to be tested.
+        gamma: The parameter values (e.g., damping coefficients) to be tested.
         initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
         T: Array, time points for which the data is to be simulated.
         k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
@@ -313,15 +320,14 @@ def target_function(method,gammas,initial_conditions,T, k, observed_y, observed_
     Outputs:
         target_function:  where each element contains the simulated system states for each value of gamma at given time point.
     """
-    simulated_data = np.zeros((len(T),len(gammas),  2))
-    simulated_data[:, 0, :] = initial_conditions 
+  
+       
+    simulated_data = method(gamma, k,initial_conditions, T)
+    print("data=",simulated_data)
+    ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
     
-    for i, gamma in enumerate(gammas): 
-        
-        simulated_data[:,i, :] = method(gammas, k, T)
-        
-    ll = calculate_combined_log_likelihood(simulated_data[:, - 1, :], observed_y, observed_yp, sigma_y, sigma_yp)
     target_function = np.sum(ll)
+    print("tf=",target_function)
     return  target_function
 
 
@@ -357,23 +363,25 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
     Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
     
     
-    target_function_Post =  target_function(method, gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)/number_of_gammas
+    target_function_Post = lambda x: target_function(method, x, initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp) / number_of_gammas
     proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
     target_function_phat = lambda x : scipy.stats.multivariate_normal.logpdf(x, cov=np.eye(len(x)) * 0.3)
     proposal_function_phat  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.3)
     for i in range (N-1):
+        
+         
          #Taking sampling using Metropolis Hasting algrithm. 
-         tht2 = Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_Post,proposal_function_Post )
-         tht1 = Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat )
+         tht2 = Metropolis_hasting(method,gammas,initial_conditions,i, k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_Post,proposal_function_Post )
+         tht1 = Metropolis_hasting(method,gammas,initial_conditions,i, k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat )
          
          
          #Finding Q11
-         q11 =  target_function(method,tht1,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
+         q11 =  target_function(method,tht1,initial_conditions,i, k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
          #print('l1=',likelihood1)
          
          
          #Finding Q12
-         q12 = target_function(method,tht2, initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp)
+         q12 = target_function(method,tht2, initial_conditions,i, k, observed_y, observed_yp, sigma_y, sigma_yp)
          #print('q12=',q12)
          
          #Finding Q21
@@ -417,15 +425,15 @@ if __name__ == '__main__':
     k = 0.5
     initial_conditions = [1, 0]
     number_of_gammas = 10
-    Dimention_of_parameter_space = 1 
+    Dimention_of_parameter_space = 1
     gammas = np.linspace(0, 1, 10)
-    T = np.linspace(0, 10, 100)
-    check_points = [10,50,80]
+    T = np.linspace(0, 10, 10)
+    check_points = [1,5,8]
     
     Timepoint_of_interest=0
-    N = 100
-    N1 = 100
-    N2 = 100
+    N = 10
+    N1 = 10
+    N2 = 10
     sigma_y = 0.3 
     sigma_yp = 0.1
     noise_level_s = 0.0001
