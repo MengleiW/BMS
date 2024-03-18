@@ -282,9 +282,9 @@ def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observ
     for i in range(M):
         # Propose a new state from multivariate distribution 
         Y = proposal_Function(X_t)
-        print("y=",Y)
-        print(target_Function(Y))
-        print(target_Function(X_t))
+        #print("y=",Y)
+        #print(target_Function(Y))
+        #print(target_Function(X_t))
         #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
         r = np.exp(target_Function(Y)-target_Function(X_t)) #* weights
        # print('r=',r)
@@ -326,7 +326,7 @@ def target_function(method,gamma,initial_conditions,T, k, observed_y, observed_y
     ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
     
     l = np.sum(ll)
-    print("l=",l)
+    
     return  l
 
 
@@ -376,21 +376,21 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          
          #Finding Q11
          q11 =  target_function(method,tht1,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
-         #print('l1=',likelihood1)
+         print('q11=',q11)
          
          
          #Finding Q12
          q12 = target_function(method,tht2, initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)
-         #print('q12=',q12)
+         print('q12=',q12)
          
          #Finding Q21
          q21 = scipy.stats.multivariate_normal.logpdf(tht1, cov=np.eye(len(tht1)) * 0.3)
-         #print('q21=',q21)
+         print('q21=',q21)
         
          #Finding Q22
         
          q22 = scipy.stats.multivariate_normal.logpdf(tht2, cov=np.eye(len(tht2)) * 0.3)
-         #print('l2=',likelihood2)
+         print('q22=',q22)
         
          #epsilon = 1e-10
          #q11 = np.maximum(q11, epsilon)
@@ -399,8 +399,8 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          #q22 = np.maximum(q22, epsilon)
          
          
-         Q1 = np.logaddexp.reduce(np.log(q11)) - np.logaddexp.reduce(np.log(N1*q11 + N2*Zhat*q21))+N1
-         Q2 = np.logaddexp.reduce(np.log(q22)) - np.logaddexp.reduce(np.log(N1*q12 + N2*Zhat*q22))+N2
+         Q1 = np.logaddexp.reduce(q11) - np.logaddexp.reduce(np.logN1*q11 + N2*Zhat*q21)+np.log(N1)
+         Q2 = np.logaddexp.reduce(q22)- np.logaddexp.reduce(N1*q12 + N2*Zhat*q22)+np.log(N2)
          print('Q1=',Q1)
          print('Q2=',Q2)
          
