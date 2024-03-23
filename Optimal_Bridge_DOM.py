@@ -330,6 +330,7 @@ def target_function(method,gamma,initial_conditions,T, k, observed_y, observed_y
     return  l
 
 
+
 def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space):
     
     """
@@ -358,7 +359,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          10/07/2023 (Menglei Wang)
            
     """
-    Z = [1]
+    Z = []
     Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
     
     
@@ -366,7 +367,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
     proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
     target_function_phat = lambda x : scipy.stats.multivariate_normal.logpdf(x, cov=np.eye(len(x)) * 0.3)
     proposal_function_phat  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.3)
-    for i in range (N-1):
+    for i in range (N):
         
          
          #Taking sampling using Metropolis Hasting algrithm. 
@@ -376,21 +377,21 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          
          #Finding Q11
          q11 =  target_function(method,tht1,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
-         print('q11=',q11)
+         #print('q11=',q11)
          
          
          #Finding Q12
          q12 = target_function(method,tht2, initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)
-         print('q12=',q12)
+         #print('q12=',q12)
          
          #Finding Q21
          q21 = scipy.stats.multivariate_normal.logpdf(tht1, cov=np.eye(len(tht1)) * 0.3)
-         print('q21=',q21)
+         #print('q21=',q21)
         
          #Finding Q22
         
          q22 = scipy.stats.multivariate_normal.logpdf(tht2, cov=np.eye(len(tht2)) * 0.3)
-         print('q22=',q22)
+         #print('q22=',q22)
         
          #epsilon = 1e-10
          #q11 = np.maximum(q11, epsilon)
@@ -399,16 +400,18 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          #q22 = np.maximum(q22, epsilon)
          
          
-         Q1 = np.logaddexp.reduce(q11) - np.logaddexp.reduce(np.logN1*q11 + N2*Zhat*q21)+np.log(N1)
-         Q2 = np.logaddexp.reduce(q22)- np.logaddexp.reduce(N1*q12 + N2*Zhat*q22)+np.log(N2)
+         Q1 = q11 - N1*q11 + np.logaddexp.reduce(N2*Zhat*q21)/N+np.log(N1)
+         Q2 = np.logaddexp.reduce(q22)- N1*q12 + np.logaddexp.reduce(N2*Zhat*q22)/N+np.log(N2)
          print('Q1=',Q1)
          print('Q2=',Q2)
          
          
          
-         
-         
-         zhat = np.exp(Q1 - Q2+ np.log(Z[-1]))
+         print('Z=',Q1-Q2)
+         if not Z: 
+            zhat = np.exp(Q1 - Q2)
+         else:
+            zhat = np.exp(Q1 - Q2) * Z[-1]  
          Z.append(zhat)
 
     return Z
