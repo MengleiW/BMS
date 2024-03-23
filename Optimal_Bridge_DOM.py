@@ -325,9 +325,9 @@ def target_function(method,gamma,initial_conditions,T, k, observed_y, observed_y
     #print("data=",simulated_data)
     ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
     
-    l = np.sum(ll)
     
-    return  l
+    
+    return  ll
 
 
 
@@ -371,13 +371,16 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
         
          
          #Taking sampling using Metropolis Hasting algrithm. 
-         tht2 = Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_Post,proposal_function_Post )
-         tht1 = Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat )
+         tht2 = np.array(Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_Post,proposal_function_Post ))
+         tht1 = np.array(Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat ))
+         tht1 = tht1.ravel()
+         tht2 = tht2.ravel()
+
          
          
          #Finding Q11
          q11 =  target_function(method,tht1,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
-         #print('q11=',q11)
+         print('q11=',q11)
          
          
          #Finding Q12
@@ -386,7 +389,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          
          #Finding Q21
          q21 = scipy.stats.multivariate_normal.logpdf(tht1, cov=np.eye(len(tht1)) * 0.3)
-         #print('q21=',q21)
+         print('q21=',q21)
         
          #Finding Q22
         
@@ -400,10 +403,10 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          #q22 = np.maximum(q22, epsilon)
          
          
-         Q1 = q11 - N1*q11 + np.logaddexp.reduce(N2*Zhat*q21)/N+np.log(N1)
-         Q2 = np.logaddexp.reduce(q22)- N1*q12 + np.logaddexp.reduce(N2*Zhat*q22)/N+np.log(N2)
-         print('Q1=',Q1)
-         print('Q2=',Q2)
+         Q1 = q11 - N1*q11 + np.logaddexp.reduce(N2*Zhat*q21)+np.log(N1)
+         Q2 = np.logaddexp.reduce(q22)- N1*q12 + np.logaddexp.reduce(N2*Zhat*q22)+np.log(N2)
+         #print('Q1=',Q1)
+         #print('Q2=',Q2)
          
          
          
