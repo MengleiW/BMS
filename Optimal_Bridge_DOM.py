@@ -287,10 +287,10 @@ def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observ
         #print(target_Function(X_t))
         #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
         r = np.exp(target_Function(Y)-target_Function(X_t)) #* weights
-       # print('r=',r)
+        #print('r=',r)
         
         alpha = np.minimum(1, r)
-        #print('alpha=',alpha)yh
+        #print('alpha=',alpha)
         
         if np.random.random() < alpha:
             X_t = Y
