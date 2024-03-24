@@ -286,7 +286,7 @@ def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observ
         #print(target_Function(Y))
         #print(target_Function(X_t))
         #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
-        r = np.exp(target_Function(Y)-target_Function(X_t)) #* weights
+        r = np.exp(np.sum(target_Function(Y))-np.sum(target_Function(X_t))) #* weights
         #print('r=',r)
         
         alpha = np.minimum(1, r)
@@ -375,7 +375,8 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          tht1 = np.array(Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat ))
          tht1 = tht1.ravel()
          tht2 = tht2.ravel()
-
+         print('tht1=',tht1)
+         print('tht2=',tht2)
          
          
          #Finding Q11
@@ -386,36 +387,36 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          #Finding Q12
          q12 = target_function(method,tht2, initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)
          #print('q12=',q12)
+         for j in range(N):
+            #Finding Q21
+            q21 = scipy.stats.multivariate_normal.logpdf(tht1[j], cov=np.eye(len(tht1)) * 0.3)
+            print('q21=',q21)
+            
+            #Finding Q22
+            
+            q22 = scipy.stats.multivariate_normal.logpdf(tht2[j], cov=np.eye(len(tht2)) * 0.3)
+            print('q22=',q22)
+            
+            #epsilon = 1e-10
+            #q11 = np.maximum(q11, epsilon)
+            #q12 = np.maximum(q12, epsilon)
+            #q21 = np.maximum(q21, epsilon)
+            #q22 = np.maximum(q22, epsilon)
+            
+            
+            Q1 = q11 - N1*q11 + np.logaddexp.reduce(N2*Zhat*q21)+np.log(N1)
+            Q2 = np.logaddexp.reduce(q22)- N1*q12 + np.logaddexp.reduce(N2*Zhat*q22)+np.log(N2)
+            #print('Q1=',Q1)
+            #print('Q2=',Q2)
          
-         #Finding Q21
-         q21 = scipy.stats.multivariate_normal.logpdf(tht1, cov=np.eye(len(tht1)) * 0.3)
-         print('q21=',q21)
-        
-         #Finding Q22
-        
-         q22 = scipy.stats.multivariate_normal.logpdf(tht2, cov=np.eye(len(tht2)) * 0.3)
-         #print('q22=',q22)
-        
-         #epsilon = 1e-10
-         #q11 = np.maximum(q11, epsilon)
-         #q12 = np.maximum(q12, epsilon)
-         #q21 = np.maximum(q21, epsilon)
-         #q22 = np.maximum(q22, epsilon)
          
          
-         Q1 = q11 - N1*q11 + np.logaddexp.reduce(N2*Zhat*q21)+np.log(N1)
-         Q2 = np.logaddexp.reduce(q22)- N1*q12 + np.logaddexp.reduce(N2*Zhat*q22)+np.log(N2)
-         #print('Q1=',Q1)
-         #print('Q2=',Q2)
-         
-         
-         
-         print('Z=',Q1-Q2)
-         if not Z: 
-            zhat = np.exp(Q1 - Q2)
-         else:
-            zhat = np.exp(Q1 - Q2) * Z[-1]  
-         Z.append(zhat)
+            print('Z=',Q1-Q2)
+            if not Z: 
+                zhat = np.exp(Q1 - Q2)
+            else:
+                zhat = np.exp(Q1 - Q2) * Z[-1]  
+            Z.append(zhat)
 
     return Z
 
