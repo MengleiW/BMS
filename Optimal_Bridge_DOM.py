@@ -282,7 +282,7 @@ def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observ
     for i in range(M):
         # Propose a new state from multivariate distribution 
         Y = proposal_Function(X_t)
-        print("y=",Y)
+        #print("y=",Y)
         #print(target_Function(Y))
         #print(target_Function(X_t))
         #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
@@ -322,7 +322,7 @@ def target_function(method,gamma,initial_conditions,T, k, observed_y, observed_y
   
        
     simulated_data = method(gamma, k,initial_conditions, T)
-    print("data=",simulated_data)
+    #print("data=",simulated_data)
     ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
     #print("ll=",ll)
     
@@ -355,7 +355,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
        
        
      Modified:
-   
+                 
          3/24/2024 (Menglei Wang)
            
     """
@@ -376,8 +376,8 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          tht1 = np.array(Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat ))
          tht1 = tht1.ravel()
          tht2 = tht2.ravel()
-         print('tht1=',tht1)
-         print('tht2=',tht2)
+         #print('tht1=',tht1)
+         #print('tht2=',tht2)
          
          
          #Finding Q11
