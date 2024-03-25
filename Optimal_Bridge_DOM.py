@@ -282,7 +282,7 @@ def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observ
     for i in range(M):
         # Propose a new state from multivariate distribution 
         Y = proposal_Function(X_t)
-        #print("y=",Y)
+        print("y=",Y)
         #print(target_Function(Y))
         #print(target_Function(X_t))
         #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
@@ -361,7 +361,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
     """
     Z = []
     Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
-    ZH=[]
+    
     
     target_function_Post = lambda x: target_function(method, x, initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp) / number_of_gammas
     proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
@@ -369,7 +369,8 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
     proposal_function_phat  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.3)
     for i in range (N):
         
-         
+         Q1=[]
+         Q2=[]
          #Taking sampling using Metropolis Hasting algrithm. 
          tht2 = np.array(Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_Post,proposal_function_Post ))
          tht1 = np.array(Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat ))
@@ -387,40 +388,34 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          #Finding Q12
          q12 = target_function(method,tht2, initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)
          print('q12=',q12)
-         for j in range(len(q11)):
+         for j1 in range(len(q11)):
             #Finding Q21
-            q21 = scipy.stats.multivariate_normal.logpdf(tht1[j], cov=np.eye(len(tht1)) * 0.3)
+            q21 = scipy.stats.multivariate_normal.logpdf(tht1[j1], cov=np.eye(len(tht1)) * 0.3)
             print('q21=',q21)
+            q1 = q11[j1] - N1*q11[j1] + N2*Zhat*q21
+            Q1.append(q1)
             
+         for j2 in range(len(q11)):   
             #Finding Q22
             
-            q22 = scipy.stats.multivariate_normal.logpdf(tht2[j], cov=np.eye(len(tht2)) * 0.3)
+            q22 = scipy.stats.multivariate_normal.logpdf(tht2[j2], cov=np.eye(len(tht2)) * 0.3)
             print('q22=',q22)
-            
-            #epsilon = 1e-10
-            #q11 = np.maximum(q11, epsilon)
-            #q12 = np.maximum(q12, epsilon)
-            #q21 = np.maximum(q21, epsilon)
-            #q22 = np.maximum(q22, epsilon)
+            q2 = q22- N1*q12[j2] + N2*Zhat*q22
+            Q2.append(q2)
             
             
-            Q1 = q11[j] - N1*q11[j] + N2*Zhat*q21
-            Q2 = q22- N1*q12[j] + N2*Zhat*q22
-            print('Q1=',Q1)
-            print('Q2=',Q2)
-         
-         
-         
-            print('Q1-Q2=',Q1-Q2)
-            if not ZH: 
-                zhat = np.exp(Q1 - Q2)
-            else:
-                zhat = np.exp(Q1 - Q2) * ZH[-1]  
-            ZH.append(zhat)
-            print("error_check = ",ZH)
-            return ZH[-1]
             
-         Z.append(ZH)
+          #epsilon = 1e-10
+          #q11 = np.maximum(q11, epsilon)
+          #q12 = np.maximum(q12, epsilon)
+          #q21 = np.maximum(q21, epsilon)
+          #q22 = np.maximum(q22, epsilon)
+         if not Z: 
+             zhat = np.exp(np.sum(Q1) - np.sum(Q2))
+         else:
+             zhat = np.exp(np.sum(Q1) - np.sum(Q2)) * Z[-1]  
+         Z.append(zhat)
+         print("error_check = ",Z)
 
     return Z
 
