@@ -322,9 +322,9 @@ def target_function(method,gamma,initial_conditions,T, k, observed_y, observed_y
   
        
     simulated_data = method(gamma, k,initial_conditions, T)
-    #print("data=",simulated_data)
+    print("data=",simulated_data)
     ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
-    
+    #print("ll=",ll)
     
     
     return  ll
@@ -356,12 +356,12 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
        
      Modified:
    
-         10/07/2023 (Menglei Wang)
+         3/24/2024 (Menglei Wang)
            
     """
     Z = []
     Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
-    
+    ZH=[]
     
     target_function_Post = lambda x: target_function(method, x, initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp) / number_of_gammas
     proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
@@ -386,8 +386,8 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          
          #Finding Q12
          q12 = target_function(method,tht2, initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)
-         #print('q12=',q12)
-         for j in range(N):
+         print('q12=',q12)
+         for j in range(len(q11)):
             #Finding Q21
             q21 = scipy.stats.multivariate_normal.logpdf(tht1[j], cov=np.eye(len(tht1)) * 0.3)
             print('q21=',q21)
@@ -404,23 +404,27 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
             #q22 = np.maximum(q22, epsilon)
             
             
-            Q1 = q11 - N1*q11 + np.logaddexp.reduce(N2*Zhat*q21)+np.log(N1)
-            Q2 = np.logaddexp.reduce(q22)- N1*q12 + np.logaddexp.reduce(N2*Zhat*q22)+np.log(N2)
-            #print('Q1=',Q1)
-            #print('Q2=',Q2)
+            Q1 = q11[j] - N1*q11[j] + N2*Zhat*q21
+            Q2 = q22- N1*q12[j] + N2*Zhat*q22
+            print('Q1=',Q1)
+            print('Q2=',Q2)
          
          
          
-            print('Z=',Q1-Q2)
-            if not Z: 
+            print('Q1-Q2=',Q1-Q2)
+            if not ZH: 
                 zhat = np.exp(Q1 - Q2)
             else:
-                zhat = np.exp(Q1 - Q2) * Z[-1]  
-            Z.append(zhat)
+                zhat = np.exp(Q1 - Q2) * ZH[-1]  
+            ZH.append(zhat)
+            print("error_check = ",ZH)
+            return ZH[-1]
+            
+         Z.append(ZH)
 
     return Z
 
-#print("error_check = ",y[i, :])
+
     
     
 if __name__ == '__main__':   
