@@ -1,115 +1,138 @@
-# -*- coding: utf-8 -*-
-"""
-Description: Determine the model evidence for two classes of atomic models,
-    using the MCMC samples of the estimated model parameters (tht) and
-    associated samples from the model outputs y = f(tht,M).
-   
-    Each model output is a 9-dimensional vector representing the difference
-    between the computed and the reference NIST energies.
-   
-    The parameters are 2-dimensional vectors representing a subset of orbital
-    scaling parameters with an assumed uniform prior on [0.7,1.3]^2.
-
-
-    We compute the model evidence using
-   
-   
-    1. Importance sampling
-    
-    2. Hermonic Mean
-    
-    3. Reverse important sampling with t-distributions and multivriate normal distribution as auxiliary normalized function.
-
-    4. Two stage umbrella
-   
-Created on Mon Oct  2 9:34:22 2023
-
-@author: whisk
-"""
-
 import numpy as np
+import scipy
 import matplotlib.pyplot as plt
-import math
-import pickle
-import scipy.special
+#import math
+#import pymc3 as pm
+#import theano.tensor as tt
 
-import random
 
-def uniform_prior(theta, theta_bounds):
+def damped_oscillator(t, y, gamma, k):
     """
-    Description: To find the uniform prior.
+    Models a damped oscillator system.
 
     Inputs:
-       
-        theta: theta_i stands for variable of interest
-       
-        theta_bounds: (d,2) array whose ith row gives the minimum and maximum
-            value of theta_i
-       
+          t: Float, the current time point.
+          y: List, current state of the system.
+          gamma: Float, damping coefficient.
+          k: Float, stiffness coefficient.
+
     Outputs:
-   
-         prior: (1,1) approximatioin of nomalized prior
-
-       
-       
-     Modified:
-   
-         10/07/2023 (Menglei Wang)
-           
+         [y[1], f_t - gamma*y[1] - k*y[0]]: List, Derivative of the system state.
     """
-   
-    # Dimensions of the sampled parameter
-    N, d = theta.shape
-   
-    # Area of the region
-    A = np.prod(theta_bounds[:,1]-theta_bounds[:,0])
-   
-    # Determine what samples lie within region
-    in_region = np.ones(N)
-    for di in range(d):
-        in_region *= (theta_bounds[di,0]<=theta[:,0])\
-                    *(theta[:,1]<=theta_bounds[di,1])
-                   
-    # Multiply by Area
-    prior = in_region/A
-   
-    return prior
+    f_t = 0  
+    #f_t = np.sin(t) 
+    return [y[1], f_t - gamma*y[1] - k*y[0]]
 
-
-
-def gauss_log_likelihood(y, sigma):
+def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, noise_level_j):
     """
-    Description: Evaluate the multivariate Gaussian log likelihood function
-        associated with model outputs
+    Simulates the damped oscillator system over a given time span using solve_ivp.
 
     Inputs:
-       
-        y : double, (N,m) array of sample model outputs.
-       
-        sigma: double >0, the standard diviation of Multivariate normal
-            distribution representing the experimental error.
-       
-       
+      gamma: Float, damping coefficient.
+      k: Float, stiffness coefficient.
+      initial_conditions: List, initial state of the system.
+      ts: List, time span for simulation .
+      N: Integer, number of points to evaluate in the time span.
+      smooth_noise_level: number, level of random noise in the first half (smooth phase).
+      jumpy_noise_level: number, level of random noise in the second half (jumpy phase).
     Outputs:
-   
-        l: double, (N,) vector of log-likelihood values
-           
-           
-    Modified:
-       
-        10/08/2023 (Menglei Wang)
-           
+      (y, yp): list, where y is the position array and yp is the velocity array over the time span.
     """
-    # Data size
-    N, m = y.shape
-   
-    # Gaussian log-likelihood
-    ll = -0.5*m*np.log(2*np.pi) - 0.5*m*np.log(sigma**2) \
-        - 0.5/(sigma**2)*np.sum(y**2,axis=1)
+    t = np.linspace(ts[0], ts[1], N)
+    sol = scipy.integrate.solve_ivp(damped_oscillator, ts, initial_conditions, args=(gamma, k), t_eval=t)
+    half = N // 2
+    y = sol.y[0]
+    yp = sol.y[1]  
+    # Apply smooth noise to the first half and jumpy noise to the second half
+    noise1 = np.concatenate([np.random.normal(0, noise_level_s,  half),
+                             np.random.normal(0, noise_level_j, N -  half)])
+    noise2 = np.concatenate([np.random.normal(0, noise_level_s,  half),
+                             np.random.normal(0, noise_level_j, N -  half)])
+    y += noise1
+    yp += noise2
     
+    return y, yp
+
+def euler_forward(gammas, k, y0, T):
+    """
+    Numerically approximates the solution of the damped oscillator using the Euler forward method for a single time point.
+
+    Inputs:
+      gammas: Array, range of damping coefficients.
+      k: Float, stiffness coefficient.
+      y0: 2D Array, initial states of the system for each gamma (position and velocity).
+      T: Float, Time point.
+      
+
+    Outputs:
+      y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
+    """
+
+    y = np.zeros((len(T), 2))
+    y[0, :] = y0
+    if len(T)>1:
+        for i, t in enumerate(T[:-1]):
+            h = T[i+1] - T[i]
+            y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gamma, k))
+            
+    return y
+
+def trapezoidal_method(gammas, k, y0, T):
+    """
+    Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
+
+    Inputs:
+      gammas: Array, range of damping coefficients.
+      k: Float, stiffness coefficient.
+      initial_conditions: 2D Array, initial states of the system for each gamma (position and velocity).
+      T: Float, Time points.
+      
+
+    Outputs:
+      y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
+    """
+    y = np.zeros((len(T), 2))
+    y[0, :] = y0
+    if len(T)>1:
+        for i, t in enumerate(T[:-1]):
+            h = T[i+1] - T[i]
+            f_n = np.array(damped_oscillator(t, y[i, :], gamma, k))
+            y_pred = y[i, :] + h * f_n
+            f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gamma, k))
+            y[i + 1, :] = y[i, :] + h / 2 * (f_n + f_n_plus_1)
+
+    return y
+
+
+def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_y, sigma_yp):
+    """
+    Computes the combined log-likelihood of the observed position and velocity data for a given simulated dataset.
+    And since we are intrest both
+    Inputs:
+        simulated: Array, the simulated data from the model.
+        observed_y: Array, observed data for position (y).
+        observed_yp: Array, observed data for velocity (y').
+        sigma_y: Float, standard deviation of error in position measurements.
+        sigma_yp: Float, standard deviation of error in velocity measurements.
+
+    Outputs:
+        log_likelihood: Float, the combined log-likelihood value of the observed data given the simulated model outputs.
+
+    """
+    ll = np.zeros(simulated.shape[0])
+
+    for i in range(simulated.shape[0]):
+        residuals_y = observed_y - simulated[i,  0]
+        residuals_yp = observed_yp - simulated[i, 1]
+
+        ll_y = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
+        ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
+
+        ll[i] = ll_y + ll_yp
+
     return ll
-   
-def HM_FindZ(log_likelihood,y):
+
+def HM_FindZ(log_likelihood, N):
     """
     Description: To find the Z = nomalizing constant using Importat sampling method given liklihood and prior
 
@@ -131,494 +154,335 @@ def HM_FindZ(log_likelihood,y):
             10/05/2023 (Menglei Wang)
            
         """
-    # Data size
-    N, m = y.shape   
+   
+    log_Zhat = scipy.special.logsumexp(log_likelihood) /N
     
-    #unlog the log_likehood
-    likelihood = np.exp(log_likelihood)
     
-    #calculate Zhat
-    Zhat = 1/((np.sum(1/likelihood))/N)
-    
+    # Exponentiate to get Zhat, if necessary. Otherwise, return log_Zhat based on use case.
+    Zhat = 1/np.exp(log_Zhat)
+
     return Zhat
-   
-def Is_FindZ(log_likelihood, prior):
+
+def Saved_DATA(method, gammas, initial_conditions, T, k):
     """
-    Description: To find the Z = nomalizing constant using Importat sampling method given liklihood and prior
+    Simulates and saves data for a range of parameter values over specified time points using a numerical method.
 
     Inputs:
-       
-       
-        log_Likelihood: Single, (1,1) , l(y|theta_i, M) where theta_i stands for variable of interest , y stands for the data and
-        M is our current model.
-       
-        prior : Single, (1,N) , g(theta_i) where theta_i stands for variable of interest.
-       
-       
-        Outputs:
-       
-            Zhat: (1,1) approximatioin of nomalized posterior.
-
-           
-           
-        Modified:
-       
-            10/05/2023 (Menglei Wang)
-           
-        """
-
-    # Data size
-    N, m = y.shape
-
-    #unlog the log_likehood
-    likelihood = np.exp(log_likelihood)
-    
-    # Summing the product of prior and likelihoo
-    phon = np.sum(prior * likelihood) 
-    print('phon =', phon)
-    # Calculating the normalized posterior
-    Zhat = np.sum((prior * likelihood)/phon)
-    print('Zhat =', Zhat)
-    
-    return Zhat
- 
-def RIS_FindZ(log_likelihood, prior,y):
-    """
-    Description: To find the Z = nomalizing constant using Importat sampling method given liklihood and prior
-
-    Inputs:
-       
-       
-        log_Likelihood: Single, (1,1) , l(y|theta_i, M) where theta_i stands for variable of interest , y stands for the data and
-        M is our current model.
-       
-        prior : Single, (1,N) , g(theta_i) where theta_i stands for variable of interest.
-       
-       
-        Outputs:
-       
-            Zhat: (1,1) approximatioin of nomalized posterior.
-
-           
-           
-        Modified:
-       
-            10/15/2023 (Menglei Wang)
-           
-        """
-
-    # Data size
-    N, m = y.shape
-
-    #unlog the log_likehood
-    likelihood = np.exp(log_likelihood)
-    
-    # Using multivariate gaussian as my auxiliry function
-    #f = -0.5*m*np.log(2*np.pi) - 0.5*m*np.log(sigma**2) \
-        #- 0.5/(sigma**2)*np.sum(y**2,axis=1)
+        method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
+        gammas: Array, range of parameter values (e.g., damping coefficients) to be tested.
+        initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
+        T: Array, time points for which the data is to be simulated.
+        k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
         
-    #Using t-distributions as auxiliary normalized function
-    t = 100
-    f = np.log(scipy.special.gammaln((t+1)/2))+(-(t+1)/2)*np.log(1+(m**2)/t)-np.log(((t*math.pi)**0.5)*scipy.special.gammaln(t/2))
-    print('f =', f)
-    if f < 0:
-        f =-f 
-    # Calculating the normalized posterior
-    Zhat = 1/(np.sum(f/(prior * likelihood))/N)
-    print('Zhat =', Zhat)
-    
-    return Zhat
- 
-def HMModel_compaire (data,sigma):
-    """
-    Description: To Compaire models using normalizing constant approximated by Hermonic Mean smapling
-
-    Inputs:
-        data: (2,2) The data generated by a MCMC = {'model01': {'tht': tht_for_model01, 'y': y_vals_for_model01 }, 
-              'model02': {'tht': tht_for_model02, 'y': y_vals_for_model02 }} 
-       
-        sigma: double >0, the standard diviation of Multivariate normal
-               distribution representing the experimental error.
-
-       
-       
-        Outputs:
-       
-            C: (1,1) Ratios between the normalizing constants of two models.
-
-            Graph: A pie graph of the ratio C.
-           
-        Modified:
-       
-            10/12/2023 (Menglei Wang)
-           
-        """
-    #extrac data
-    tht1 = data['model01']['tht']
-    tht2 = data['model02']['tht']
-    y1 = data['model01']['y']
-    y2 = data['model02']['y']
-    theta_bounds = np.array([[0.7,1.3],[0.7,1.3]])
-   
-    # Data size
-    N, m = y1.shape
-    
-    #Finding Z1
-    likelihood1 = gauss_log_likelihood(y1,sigma)
-    Z1 = HM_FindZ(likelihood1,y1)
-    
-   #Finding Z2
-    likelihood2 = gauss_log_likelihood(y2,sigma)
-    Z2 = HM_FindZ(likelihood2,y2)
-    
-    #Comparie the nomalizing constant
-    C = Z2/Z1
-    print('c = ' , C)
-    
-    #graphing
-    plt.pie([Z2,Z1], labels= [Z2,Z1], colors = ["red","blue"])
-    plt.annotate('Red is Z2', xy=(-1.1,0.8))
-    plt.annotate('Blue is Z1', xy=(-1.1, 0.9)) 
-    plt.title('Z1,Z2')
-    plt.tight_layout()
-    plt.show()
-    return C
-
-def ISModel_compaire (data,sigma):
-    """
-    Description: To Compaire models using normalizing constant approximated by Reverse important smapling
-
-    Inputs:
-        data: (2,2) The data generated by a MCMC = {'model01': {'tht': tht_for_model01, 'y': y_vals_for_model01 }, 
-              'model02': {'tht': tht_for_model02, 'y': y_vals_for_model02 }} 
-       
-        sigma: double >0, the standard diviation of Multivariate normal
-               distribution representing the experimental error.
-
-       
-       
-        Outputs:
-       
-            C: (1,1) Ratios between the normalizing constants of two models.
-
-           
-           
-        Modified:
-       
-            10/12/2023 (Menglei Wang)
-           
-        """
-    
-  
-    
-    #extrac data
-    tht1 = data['model01']['tht']
-    tht2 = data['model02']['tht']
-    y1 = data['model01']['y']
-    y2 = data['model02']['y']
-    
-    # Data size
-    N, m = y1.shape
-    
-    #Finding Z1
-    prior1 = uniform_prior(tht1)
-    likelihood1 = gauss_log_likelihood(y1,sigma,N)
-    Z1 = Is_FindZ(N,likelihood1, prior1)
-    
-   #Finding Z2
-    prior2 = uniform_prior(tht2)
-    likelihood2 = gauss_log_likelihood(y2,sigma,N)
-    Z2 = Is_FindZ(N,likelihood2, prior2)
-   
-    C = Z2/Z1
-    print('c = ' , C)
-    return C
-
-
-def RisModel_compaire (data,sigma):
-    """
-    Description: To Compaire models using normalizing constant approximated by Hermonic Mean smapling
-
-    Inputs:
-        data: (2,2) The data generated by a MCMC = {'model01': {'tht': tht_for_model01, 'y': y_vals_for_model01 }, 
-              'model02': {'tht': tht_for_model02, 'y': y_vals_for_model02 }} 
-       
-        sigma: double >0, the standard diviation of Multivariate normal
-               distribution representing the experimental error.
-
-       
-       
-        Outputs:
-       
-            C: (1,1) Ratios between the normalizing constants of two models.
-
-            Graph: A pie graph of the ratio C.
-           
-        Modified:
-       
-            10/12/2023 (Menglei Wang)
-           
-        """
-    #extrac data
-    tht1 = data['model01']['tht']
-    tht2 = data['model02']['tht']
-    y1 = data['model01']['y']
-    y2 = data['model02']['y']
-    theta_bounds = np.array([[0.7,1.3],[0.7,1.3]])
-   
-    # Data size
-    N, m = y1.shape
-    
-    
-    #Finding Z1
-    log_likelihood1 = gauss_log_likelihood(y1,sigma)
-    prior1 = uniform_prior(tht1, theta_bounds)
-    Z1 = RIS_FindZ(log_likelihood1,prior1,y1)
-    
-   #Finding Z2
-    log_likelihood2 = gauss_log_likelihood(y2,sigma)
-    prior2 = uniform_prior(tht2, theta_bounds)
-    Z2 = RIS_FindZ(log_likelihood2,prior2,y2)
-    
-    #Comparie the nomalizing constant
-    C = Z2/Z1
-    print('c = ' , C)
-    
-    #graphing
-    plt.pie([Z2,Z1], labels= [Z2,Z1],colors = ["red","blue"])
-    plt.annotate('Red is Z2', xy=(-1.1,0.8))
-    plt.annotate('Blue is Z1', xy=(-1.1, 0.9)) 
-    plt.title('Z1,Z2')
-    plt.tight_layout()
-    plt.show()
-    return C
-
-def Metropolis_hasting(weights,M,m,target_function,proposal_function ):
-    """
-    Description: Use the Metropolis-Hastings sampler to generate a sample froma Rayleigh distribution.
-
-    Inputs:
-       
-        sigma: double >0, the standard diviation of Multivariate normal
-               distribution representing the experimental error.
-       
-        m: dimension of the variables.
-        
-        M: number of samples 
-        
-        Target_function:   Fucntion of distribution that we wish to sample from. 
-        
-        proposal_function: Function that we propse for canidates.
-        
-       
     Outputs:
-   
-         Theta1: Sample gather from the target distribution.
-         Theta2: Sample gather from the target distribution.
-       
+        data: 3D Array, where each element contains the simulated system states for each value of gamma at each time point.
+    """
+    
+    data = np.zeros((len(T),len(gammas), 2))
+    data[:, 0, :] = initial_conditions 
+    
+    #ll = np.zeros(len(T))
+    
+    for i, gamma in enumerate(gammas): 
+        data[:, i, :] = method(gammas, k,initial_conditions, T)
+        #combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        #ll[i]=combined_log_likelihood
+        
+    return  data#, ll
+def Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp):
+    """
+    Computes the marginal likelihood estimates (Z) for specified checkpoints with data saved.
+    
+    Inputs:
+        data: 3D Array, simulated data for each gamma over time.
+        check_points: List, indices of time points in 'T' at which to calculate Z.
+        gammas: Array, range of damping coefficients tested.
+        observed_y: Array, observed data for position (y).
+        observed_yp: Array, observed data for velocity (y').
+        sigma_y: Float, standard deviation of error in position measurements.
+        sigma_yp: Float, standard deviation of error in velocity measurements.
+    
+    Outputs:
+        results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
+    """
+        
+    results = []
+    for i in range(N):#check_points:
+        combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        Z = HM_FindZ(combined_log_likelihood, len(gammas))
+        results.append(Z)
+    
+    return results 
+
+
+def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest):
+    """
+    Computes the marginal likelihood estimates (Z) using P(y_{t+1},...,y_1|M) = P(y_{t+1}|y_t,...,y_1,M)P(M | y_t,...,y_1)
+    
+    Inputs:
+        data: 3D Array, simulated data for each gamma over time.
+        check_points: List, indices of time points in 'T' at which to calculate Z.
+        gammas: Array, range of damping coefficients tested.
+        observed_y: Array, observed data for position (y).
+        observed_yp: Array, observed data for velocity (y').
+        sigma_y: Float, standard deviation of error in position measurements.
+        sigma_yp: Float, standard deviation of error in velocity measurements.
+    
+    Outputs:
+        results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
+    """
+    Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
+    
+    results = []
+    
+    # Assuming you want to use this index to start further calculations
+    for i in range(Timepoint_of_interest, N):
+        combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        #if i % 5 == 0:
+            #Zhat = HM_FindZ(combined_log_likelihood, len(gammas))
+            #results.append(Zhat)
+        #else:
+            
+        log_Zhat = np.log(Zhat)
+        #log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
+        Zhat = log_Zhat + np.sum(np.exp(combined_log_likelihood))*(gammas[1] - gammas[0])
+        #Zhat = 1/np.exp(log_Zhat)
+        results.append(Zhat)
+
+    return results  
+        
+
+
+def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,M,m,target_Function,proposal_Function ):
+    """
+    Metropolis-Hasting algorithm for sampling from a target distribution.
+
+    Parameters:
+    - M: Number of samples to generate.
+    - m: The dimension of the parameter space.
+    - target_Function: Function to compute the log-likelihood of a state.
+    - proposal_Function: Function to propose a new state given the current state.
+
+    Returns:
+    - A list of sampled states from the target distribution.
        
      Modified:
    
-         10/22/2023 (Menglei Wang)
-              
-    """        
+         11/09/2023 (Menglei Wang)
+    """ 
 
     #Set empty parameters
-    theta1 = []
-    theta2 = []
-    X_t = np.ones(2*m)
+    theta = []
+    
+    X_t = np.zeros(m)
     
     #if proposal_function == 'Gaussian':
         #proposal_function = x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.1)
 
     for i in range(M):
         # Propose a new state from multivariate distribution 
-        Y = proposal_function(X_t)
-        Y1, Y2 = Y[:m], Y[m:]
+        Y = proposal_Function(X_t)
+        #print("y=",Y)
+        #print(target_Function(Y))
+        #print(target_Function(X_t))
         #calculate acceptance rate alpha ratio, reduction due to symmetric proposal distributions.
-        r = target_function(Y)/target_function(X_t) * weights[i % len(weights)]
-       # print('r=',r)
+        r = np.exp(np.sum(target_Function(Y))-np.sum(target_Function(X_t))) #* weights
+        #print('r=',r)
         
         alpha = np.minimum(1, r)
         #print('alpha=',alpha)
         
         if np.random.random() < alpha:
             X_t = Y
-            theta1.append(Y1)
-            theta2.append(Y2)
-        else:
             
-            theta1.append(X_t[:m])
-            theta2.append(X_t[m:])
-    theta1 = np.array([arr.flatten() for arr in theta1])
-    theta2 = np.array([arr.flatten() for arr in theta2])
-    return theta1, theta2
-    
-    
-def Umbrella_sampling (NS,data, sigma ,target_function, proposal_function ):   
+        theta.append(X_t)
+    theta= np.array(theta)
+    return theta
+
+def target_function(method,gamma,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp):
     """
-    Description: To Compaire models using normalizing constant ratio approximated by Multi-stage(M stage) umbrella smapling. 
-    Drawing sample using MCMC Metropolis-Hastings sampler
+    Simulates and saves data for a range of parameter values over specified time points using a numerical method.
+
+    Inputs:y
+        method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
+        gamma: The parameter values (e.g., damping coefficients) to be tested.
+        initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
+        T: Array, time points for which the data is to be simulated.
+        k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
+        
+        observed_y: Array, observed data for position (y).
+        observed_yp: Array, observed data for velocity (y').
+        sigma_y: Standard deviation of error in position measurements.
+        sigma_yp: Standard deviation of error in velocity measurements.
+        
+        
+    Outputs:
+        target_function:  where each element contains the simulated system states for each value of gamma at given time point.
+    """
+  
+       
+    simulated_data = method(gamma, k,initial_conditions, T)
+    #print("data=",simulated_data)
+    ll = calculate_combined_log_likelihood(simulated_data, observed_y, observed_yp, sigma_y, sigma_yp)
+    #print("ll=",ll)
+    
+    
+    return  ll
+
+
+
+def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space):
+    
+    """
+    Optimal Bridge Sampling uses Metropolis-Hasting aproximate Z and iteratively updates the aproximation.
 
     Inputs:
-        
-        Ns:   (1,1) number of stages
-        
-        data: (2,2) The data generated by a MCMC = {'model01': {'tht': tht_for_model01, 'y': y_vals_for_model01 }, 
-              'model02': {'tht': tht_for_model02, 'y': y_vals_for_model02 }} 
+        method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
+        gammas: Array, range of parameter values (e.g., damping coefficients) to be tested.
+        initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
+        T: Array, time points for which the data is to be simulated.
+        k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
+        h: Float, time step.
+        observed_y: Array, observed data for position (y).
+        observed_yp: Array, observed data for velocity (y').
+        sigma_y: Standard deviation of error in position measurements.
+        sigma_yp: Standard deviation of error in velocity measurements.
        
-        sigma: double >0, the standard diviation of Multivariate normal
-               distribution representing the experimental error.
+    Outputs:
+   
+         Rhat: (0,0) The ratio between Z1 and Z2
 
-       Target_function:   Fucntion of distribution that we wish to sample from. 
        
-       proposal_function: Function that we propse for canidates.
        
-        Outputs:
-       
-            C: (1,1) Ratios between the normalizing constants of two models.
-
+     Modified:
+                 
+         3/24/2024 (Menglei Wang)
            
-        Modified:
-       
-            11/8/2023 (Menglei Wang)
-           
-        """
-    #extrac data
-    y1 = data['model01']['y']
-    y2 = data['model02']['y']
-    tht2 = data['model02']['tht']
-
-    # Data size
-    N, m = tht2.shape
-    weight = np.ones(N)
+    """
+    Z = []
+    Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
     
     
-    
-    #Sampling using mertropolis hasting MCMC method.
-    tht1,tht2  = Metropolis_hasting(weight,N,m,target_function,proposal_function)
-    theta_bounds = np.array([[0.7,1.3],[0.7,1.3]])
-    
-    
-    
-    #Finding Q1
-    prior1 = uniform_prior(tht1, theta_bounds)
-    likelihood1 = gauss_log_likelihood(y1,sigma)
-    q1 = np.array(prior1*likelihood1)
-    
-    #Finding Q2
-    prior2 = uniform_prior(tht2, theta_bounds)
-    likelihood2 = gauss_log_likelihood(y2,sigma)
-    q2 = np.array(prior2*likelihood2)
-    
-    
-    
-    
-    #Let q12 and q21 = q3, there for the sum of each denominator become N and cancles.
-    epsilon = 1e-10
-    q1 =np.log(np.maximum(q1, epsilon))
-    q2 = np.log(np.maximum(q2, epsilon))
-    
-    
-    rh = np.exp(scipy.special.logsumexp(q1 - q2))
-    
+    target_function_Post = lambda x: target_function(method, x, initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp) / number_of_gammas
+    proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
+    target_function_phat = lambda x : scipy.stats.multivariate_normal.logpdf(x, cov=np.eye(len(x)) * 0.3)
+    proposal_function_phat  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.3)
+    for i in range (N):
         
-    #Update q3
-    
-    weight = np.abs(q1 - rh * q2)
-    
-    for i in range(NS):
-        #Sampling using mertropolis hasting MCMC method.
-        tht1,tht2  = Metropolis_hasting(weight,N,m,target_function,proposal_function)
-
-        #tht2 = Metropolis_hasting(N,m,target_function,proposal_function)
-        theta_bounds = np.array([[0.7,1.3],[0.7,1.3]])
-        
-        
-        
-        #Finding Z1
-        prior1 = uniform_prior(tht1, theta_bounds)
-        likelihood1 = gauss_log_likelihood(y1,sigma)
-        q1 = np.array(prior1*likelihood1)
-        
-        #Finding Z2
-        prior2 = uniform_prior(tht2, theta_bounds)
-        likelihood2 = gauss_log_likelihood(y2,sigma)
-        q2 = np.array(prior2*likelihood2)
-        
-        #Let q12 and q21 = q3, there for the sum of each denominator become N and cancles.
-        epsilon = 1e-10
-        q1 = np.maximum(q1, epsilon)
-        q2 = np.maximum(q2, epsilon)
-        
-        q1 = np.log(q1)
-        q2 = np.log(q2)
-        rh = np.exp(scipy.special.logsumexp(q1 - q2))
+         Q1=[]
+         Q2=[]
+         #Taking sampling using Metropolis Hasting algrithm. 
+         tht2 = np.array(Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_Post,proposal_function_Post ))
+         tht1 = np.array(Metropolis_hasting(method,gammas,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp,N,Dimention_of_parameter_space,target_function_phat,proposal_function_phat ))
+         tht1 = tht1.ravel()
+         tht2 = tht2.ravel()
+         #print('tht1=',tht1)
+         #print('tht2=',tht2)
+         
+         
+         #Finding Q11
+         q11 =  target_function(method,tht1,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
+         print('q11=',q11)
+         
+         
+         #Finding Q12
+         q12 = target_function(method,tht2, initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)
+         print('q12=',q12)
+         for j1 in range(N1):
+            #Finding Q21
+            q21 = scipy.stats.multivariate_normal.logpdf(tht1[j1], cov=np.eye(len(tht1)) * 0.3)
+            print('q21=',q21)
+            q1 = q11[j1] - N1*q11[j1] + N2*Zhat*q21
+            Q1.append(q1)
             
-        #Update weight
-        
-        weight = np.abs(q1 - rh * q2)
+         for j2 in range(N2):   
+            #Finding Q22
+            
+            q22 = scipy.stats.multivariate_normal.logpdf(tht2[j2], cov=np.eye(len(tht2)) * 0.3)
+            print('q22=',q22)
+            q2 = q22- N1*q12[j2] + N2*Zhat*q22
+            Q2.append(q2)
+            
+            
+            
+          #epsilon = 1e-10
+          #q11 = np.maximum(q11, epsilon)
+          #q12 = np.maximum(q12, epsilon)
+          #q21 = np.maximum(q21, epsilon)
+          #q22 = np.maximum(q22, epsilon)
+         if not Z: 
+             zhat = np.exp(np.sum(Q1) - np.sum(Q2))
+         else:
+             zhat = np.exp(np.sum(Q1) - np.sum(Q2)) * Z[-1]  
+         Z.append(zhat)
+         print("error_check = ",Z)
+
+    return Z
+
+
     
     
-    #nomalize q1 and q2
-    Z1 = np.sum(np.exp(q1))
-    Z2 = np.sum(np.exp(q2))
-    print('Z1=',Z1)
-    #h= rh +1
-    #Z2=rh/h
-    #Z1 = 1/h
+if __name__ == '__main__':   
+    
+    #print('debug=',combined_log_likelihood)
+    # Parameters 
+    m = 1
+    k = 0.5
+    initial_conditions = [1, 0]
+    number_of_gammas = 10
+    Dimention_of_parameter_space = 1
+    gammas = np.linspace(0, 1, 10)
+    T = np.linspace(0, 10, 10)
+    check_points = [1,5,8]
+    
+    Timepoint_of_interest=0
+    N = 10
+    N1 = 10
+    N2 = 10
+    sigma_y = 0.3 
+    sigma_yp = 0.1
+    noise_level_s = 0.0001
+    noise_level_j = 0.01
     
     
-    #plt.plot([q2,q1])
-    #plt.title('Z1,Z2')
-    #plt.tight_layout()
-    #plt.show()  
+    gamma = 0.1
+    observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0,100], N, noise_level_s, noise_level_j)
+    
+    # Compute marginal likelihoods for each method
+    data_e = Saved_DATA(euler_forward, gammas, initial_conditions, T, k) 
+    #print("Z_e = ",Z_e)
+    data_t = Saved_DATA(trapezoidal_method, gammas, initial_conditions, T, k)
+    #print("Z_t = ",Z_t)
+    
+    #Z_e = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    #Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    #Z_e = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    #Z_t = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_e = OptimalBridge (euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    Z_t = OptimalBridge (trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    
+    print("Z_e contents:", Z_e)
+    print("Length of Z_e:", len(Z_e))
+    print("Z_t contents:", Z_t)
+    print("Length of Z_t:", len(Z_t))
+    
     #graphing
-    plt.pie([Z2,Z1], labels= [Z2,Z1],colors = ["red","blue"])
+    #checkpoints = list(range(1, len(Z_e) + 1)) 
+    checkpoints = list(range(N))
+
+    plt.plot(checkpoints, Z_e, label='Z_e', marker='o')  
+    plt.plot(checkpoints, Z_t, label='Z_t', marker='x')  
     
-    plt.annotate('Red is Z2', xy=(-1.1,0.8))
-    plt.annotate('Blue is Z1', xy=(-1.1, 0.9)) 
-    plt.title('Z1,Z2')
+    plt.xlabel('Checkpoints')
+    plt.ylabel('Values')
+    plt.title('Line Plot of Z_e and Z_t over Checkpoints')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+    
+    plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"])  
+    plt.annotate('Red is Z_e', xy=(-1.1,0.8))
+    plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
+    plt.title('Z_t,Z_e')
     plt.tight_layout()
-    plt.show()    
-    return 
-
-
-
-
-if __name__ == '__main__':
-    atomic_data_pickle_path = 'C:\\Users\\whisk\\atomic_data.pickle'
-    #atomic_data_path =  '../data/atomic_data.pickle'
-    with open('atomic_data.pickle', 'rb')  as f:
-       data = pickle.load(f)
-    NS = 10   
-    sigma = 0.1
-    #HMModel_compaire (data,sigma)
-    #RisModel_compaire (data,sigma)
-   
-    
-    #y = data['model01']['y']
-    
-    tht2 = data['model02']['tht']
-
-    
-
-    
-    target_function = lambda x : scipy.stats.multivariate_normal.logpdf(x, cov=np.eye(len(x)) * 0.1)
-    
-    proposal_function  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.1)
-    
-    #print(y.shape)
-    US = Umbrella_sampling (NS,data, sigma ,target_function, proposal_function   )
-   
-    
-    #ll = gauss_log_likelihood(y, sigma)
-    #theta = data['model02']['tht']
-    
-    
-    #pp = uniform_prior(theta,theta_bounds)
-    #Is_FindZ(ll, pp)
-    #print('pp=',data.shape)
-   
-   
-    #ISModel_compaire(data,0.1,9)
+    plt.show() 
