@@ -274,32 +274,40 @@ if __name__ == '__main__':
     data_t = Saved_DATA(trapezoidal_method, gammas, initial_conditions, T, k)
     #print("Z_t = ",Z_t)
     
-    Z_e = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    #Z_e = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    #Z_t = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_e1 = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_t1 = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_e2 = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_t2 = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
     
     
-    print("Z_e contents:", Z_e)
-    print("Length of Z_e:", len(Z_e))
-    print("Z_t contents:", Z_t)
-    print("Length of Z_t:", len(Z_t))
+    print("Z_e contents:", Z_e2)
+    print("Length of Z_e:", len(Z_e2))
+    print("Z_t contents:", Z_t2)
+    print("Length of Z_t:", len(Z_t2))
     
     #graphing
     #checkpoints = list(range(1, len(Z_e) + 1)) 
     checkpoints = list(range(N))
 
-    plt.plot(checkpoints, Z_e, label='Z_e', marker='o')  
-    plt.plot(checkpoints, Z_t, label='Z_t', marker='x')  
-    
+    plt.figure(figsize=(12, 6))
+
+    # Plotting Z_e1 and Z_t1
+    plt.plot(checkpoints, Z_e1, label='Z_e1', marker='o', linestyle='-', color='blue')
+    plt.plot(checkpoints, Z_t1, label='Z_t1', marker='x', linestyle='--', color='green')
+
+    # Plotting Z_e2 and Z_t2 on the same graph
+    plt.plot(checkpoints, Z_e2, label='Z_e2', marker='s', linestyle='-', color='red')
+    plt.plot(checkpoints, Z_t2, label='Z_t2', marker='^', linestyle='--', color='purple')
+
     plt.xlabel('Checkpoints')
     plt.ylabel('Values')
-    plt.title('Line Plot of Z_e and Z_t over Checkpoints')
+    plt.title('Comparison of Z_e1, Z_t1, Z_e2, Z_t2 across Checkpoints')
     plt.legend()
     plt.grid(True)
+    plt.tight_layout()
     plt.show()
     
-    plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"], autopct='%1.1f%%')  
+    plt.pie([Z_e2[-1], Z_t2[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"], autopct='%1.1f%%')  
     plt.annotate('Red is Z_e', xy=(-1.1,0.8))
     plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
     plt.title('Z_t,Z_e')
