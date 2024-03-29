@@ -367,7 +367,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
     proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
     target_function_phat = lambda x : scipy.stats.multivariate_normal.logpdf(x, cov=np.eye(len(x)) * 0.3)
     proposal_function_phat  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) * 0.3)
-    for i in range (N):
+    for i in range (len(T)+1):
         
          Q1=[]
          Q2=[]
@@ -380,45 +380,72 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          #print('tht2=',tht2)
          
          
-         #Finding Q11
-         q11 =  target_function(method,tht1,initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
-         print('q11=',q11)
          
          
-         #Finding Q12
-         q12 = target_function(method,tht2, initial_conditions, T[:i+1], k, observed_y, observed_yp, sigma_y, sigma_yp)
-         print('q12=',q12)
-         for j1 in range(len(q11)):
+         
+         
+         for j1 in range(N1):
+            #Finding Q11
+            q11 =  target_function(method,tht1[j1],initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
+            #print('q11=',q11)
             #Finding Q21
             q21 = scipy.stats.multivariate_normal.logpdf(tht1[j1], cov=np.eye(len(tht1)) * 0.3)
-            print('q21=',q21)
-            q1 = q11[j1] - N1*q11[j1] + N2*Zhat*q21
+            #print('q21=',q21)
+            q1 = np.exp(q11) / (N1*np.exp(q11) + N2*Zhat*np.exp(q21))
             Q1.append(q1)
             
-         for j2 in range(len(q11)):   
+         for j2 in range(N2):   
+            #Finding Q12
+            q12 = target_function(method,tht2[j2], initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp)
+            #print('q12=',q12)
             #Finding Q22
-            
             q22 = scipy.stats.multivariate_normal.logpdf(tht2[j2], cov=np.eye(len(tht2)) * 0.3)
-            print('q22=',q22)
-            q2 = q22- N1*q12[j2] + N2*Zhat*q22
+            #print('q22=',q22)
+            q2 = np.exp(q22)/(N1*np.exp(q12) + N2*Zhat*np.exp(q22))
             Q2.append(q2)
             
             
             
           #epsilon = 1e-10
           #q11 = np.maximum(q11, epsilon)
-          #q12 = np.maximum(q12, epsilon)
+          #q12 = np.maximum(q12, epsilon)y
           #q21 = np.maximum(q21, epsilon)
           #q22 = np.maximum(q22, epsilon)
+         #print('Q1=',np.sum(Q1))
+         #print('Q2=',np.sum(Q2))
          if not Z: 
-             zhat = np.exp(np.sum(Q1) - np.sum(Q2))
+             zhat = np.sum(Q1) - np.sum(Q2)
          else:
-             zhat = np.exp(np.sum(Q1) - np.sum(Q2)) * Z[-1]  
+             zhat = np.sum(Q1) - np.sum(Q2) * Z[-1]  
          Z.append(zhat)
-         print("error_check = ",Z)
+         #print("error_check = ",Z)
 
-    return Z
+    return Z[-1]
 
+def Slove_Z_Bridge(method,initial_conditions,T, k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space):
+    """
+    Computes the marginal likelihood estimates (Z) for specified checkpoints with data saved.
+    
+    Inputs:
+        data: 3D Array, simulated data for each gamma over time.
+        check_points: List, indices of time points in 'T' at which to calculate Z.
+        gammas: Array, range of damping coefficients tested.
+        observed_y: Array, observed data for position (y).
+        observed_yp: Array, observed data for velocity (y').
+        sigma_y: Float, standard deviation of error in position measurements.
+        sigma_yp: Float, standard deviation of error in velocity measurements.
+    
+    Outputs:
+        results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
+    """
+        
+    results = []
+    for i in range(N):#check_points:
+        Z = OptimalBridge (method,initial_conditions, T[:i+1], k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+        print(Z)
+        results.append(Z)
+
+    return results 
 
     
     
@@ -454,35 +481,44 @@ if __name__ == '__main__':
     data_t = Saved_DATA(trapezoidal_method, gammas, initial_conditions, T, k)
     #print("Z_t = ",Z_t)
     
-    #Z_e = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    #Z_t = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    #Z_e = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    #Z_t = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    Z_e = OptimalBridge (euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    Z_t = OptimalBridge (trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    
-    print("Z_e contents:", Z_e)
-    print("Length of Z_e:", len(Z_e))
-    print("Z_t contents:", Z_t)
-    print("Length of Z_t:", len(Z_t))
+    Z_e1 = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_t1 = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    #Z_e1 = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    #Z_t1 = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_e2 = Slove_Z_Bridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    Z_t2 = Slove_Z_Bridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    #Z_e2 = OptimalBridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    #Z_t2 = OptimalBridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    print("Z_e contents:", Z_e2)
+    print("Length of Z_e:", len(Z_e2))
+    print("Z_t contents:", Z_t2)
+    print("Length of Z_t:", len(Z_t2))
     
     #graphing
     #checkpoints = list(range(1, len(Z_e) + 1)) 
     checkpoints = list(range(N))
 
-    plt.plot(checkpoints, Z_e, label='Z_e', marker='o')  
-    plt.plot(checkpoints, Z_t, label='Z_t', marker='x')  
-    
+    plt.figure(figsize=(12, 6))
+
+    # Plotting Z_e1 and Z_t1
+    plt.plot(checkpoints, Z_e1, label='Z_e1', marker='o', linestyle='-', color='blue')
+    plt.plot(checkpoints, Z_t1, label='Z_t1', marker='x', linestyle='--', color='green')
+
+    # Plotting Z_e2 and Z_t2 on the same graph
+    plt.plot(checkpoints, Z_e2, label='Z_e2', marker='s', linestyle='-', color='red')
+    plt.plot(checkpoints, Z_t2, label='Z_t2', marker='^', linestyle='--', color='purple')
+
     plt.xlabel('Checkpoints')
     plt.ylabel('Values')
-    plt.title('Line Plot of Z_e and Z_t over Checkpoints')
+    plt.title('Comparison of Z_e1, Z_t1, Z_e2, Z_t2 across Checkpoints')
     plt.legend()
     plt.grid(True)
+    plt.tight_layout()
     plt.show()
     
-    plt.pie([Z_e[-1], Z_t[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"])  
-    plt.annotate('Red is Z_e', xy=(-1.1,0.8))
-    plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
-    plt.title('Z_t,Z_e')
-    plt.tight_layout()
-    plt.show() 
+    #plt.pie([Z_e1[-1], Z_t1[-1]], labels=["Z_e", "Z_t"], colors=["red", "blue"])  
+    #plt.annotate('Red is Z_e', xy=(-1.1,0.8))
+    #plt.annotate('Blue is Z_t', xy=(-1.1, 0.9)) 
+    #plt.title('Z_t,Z_e')
+    #plt.tight_layout()
+    #plt.show() 
