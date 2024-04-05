@@ -123,12 +123,12 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_
 
     for i in range(simulated.shape[0]):
         residuals_y = observed_y - simulated[i,  0]
-        residuals_yp = observed_yp - simulated[i, 1]
+        #residuals_yp = observed_yp - simulated[i, 1]
 
         ll_y = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
-        ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
+        #ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
 
-        ll[i] = ll_y + ll_yp
+        ll[i] = ll_y #+ ll_yp
 
     return ll
 
@@ -155,11 +155,11 @@ def HM_FindZ(log_likelihood, N):
            
         """
    
-    log_Zhat = scipy.special.logsumexp(log_likelihood) /N
+    Zhat = np.sum(np.exp(log_likelihood)) /N
     
     
     # Exponentiate to get Zhat, if necessary. Otherwise, return log_Zhat based on use case.
-    Zhat = 1/np.exp(log_Zhat)
+    Zhat = 1/Zhat
 
     return Zhat
 
@@ -189,7 +189,7 @@ def Saved_DATA(method, gammas, initial_conditions, T, k):
         #ll[i]=combined_log_likelihood
         
     return  data#, ll
-def Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp):
+def Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp):
     """
     Computes the marginal likelihood estimates (Z) for specified checkpoints with data saved.
     
@@ -207,15 +207,17 @@ def Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp
     """
         
     results = []
-    for i in range(N):#check_points:
-        combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+    for i in range(len(T)):#check_points:
+        for gamma in gammas:
+            simulated_data = method(gamma, k,initial_conditions, T)
+            combined_log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y[i], observed_yp[i], sigma_y, sigma_yp)
         Z = HM_FindZ(combined_log_likelihood, len(gammas))
         results.append(Z)
     
     return results 
 
 
-def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest):
+def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest):
     """
     Computes the marginal likelihood estimates (Z) using P(y_{t+1},...,y_1|M) = P(y_{t+1}|y_t,...,y_1,M)P(M | y_t,...,y_1)
     
@@ -231,21 +233,22 @@ def iterative_Z (data,check_points,gammas, observed_y, observed_yp, sigma_y, sig
     Outputs:
         results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
     """
-    Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
-    
+    Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
+    Zhat = np.log(Zhat)
     results = []
     
     # Assuming you want to use this index to start further calculations
     for i in range(Timepoint_of_interest, N):
-        combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
+        simulated_data = method(gamma, k,initial_conditions, T)
+        combined_log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y[i], observed_yp[i], sigma_y, sigma_yp)
         #if i % 5 == 0:
             #Zhat = HM_FindZ(combined_log_likelihood, len(gammas))
             #results.append(Zhat)
         #else:
             
-        log_Zhat = np.log(Zhat)
+        
         #log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
-        Zhat = log_Zhat + np.sum(np.exp(combined_log_likelihood))*(gammas[1] - gammas[0])
+        Zhat = Zhat + np.sum(np.exp(combined_log_likelihood))*(gammas[1] - gammas[0])
         #Zhat = 1/np.exp(log_Zhat)
         results.append(Zhat)
 
@@ -351,7 +354,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
     Outputs:
    
          Rhat: (0,0) The ratio between Z1 and Z2
-
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
        
        
      Modified:
@@ -360,7 +363,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
            
     """
     Z = []
-    Zhat = Slove_Z(data,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
+    Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
     
     
     target_function_Post = lambda x: target_function(method, x, initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp) / number_of_gammas
@@ -481,18 +484,18 @@ if __name__ == '__main__':
     data_t = Saved_DATA(trapezoidal_method, gammas, initial_conditions, T, k)
     #print("Z_t = ",Z_t)
     
-    Z_e1 = Slove_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    Z_t1 = Slove_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    #Z_e1 = iterative_Z(data_e,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    #Z_t1 = iterative_Z(data_t,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_e1 = Slove_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    Z_t1 = Slove_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
+    #Z_e2 = iterative_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    #Z_t2 = iterative_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
     Z_e2 = Slove_Z_Bridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
     Z_t2 = Slove_Z_Bridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
     #Z_e2 = OptimalBridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
     #Z_t2 = OptimalBridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    print("Z_e contents:", Z_e2)
-    print("Length of Z_e:", len(Z_e2))
-    print("Z_t contents:", Z_t2)
-    print("Length of Z_t:", len(Z_t2))
+    print("Z_e contents:", Z_e1)
+    print("Length of Z_e:", len(Z_e1))
+    print("Z_t contents:", Z_t1)
+    print("Length of Z_t:", len(Z_t1))
     
     #graphing
     #checkpoints = list(range(1, len(Z_e) + 1)) 
