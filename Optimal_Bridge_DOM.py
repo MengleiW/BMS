@@ -362,9 +362,9 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          3/24/2024 (Menglei Wang)
            
     """
-    Z = []
-    Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
     
+    Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
+    Z = [Zhat]
     
     target_function_Post = lambda x: target_function(method, x, initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp) / number_of_gammas
     proposal_function_Post  = lambda x: np.random.multivariate_normal(x, cov=np.eye(len(x)) *0.3)
@@ -414,8 +414,8 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
           #q12 = np.maximum(q12, epsilon)y
           #q21 = np.maximum(q21, epsilon)
           #q22 = np.maximum(q22, epsilon)
-         #print('Q1=',np.sum(Q1))
-         #print('Q2=',np.sum(Q2))
+         print('Q1=',np.sum(Q1))
+         print('Q2=',np.sum(Q2))
          if not Z: 
              zhat = np.sum(Q1) / np.sum(Q2)
          else:
@@ -525,4 +525,3 @@ if __name__ == '__main__':
     #plt.title('Z_t,Z_e')
     #plt.tight_layout()
     #plt.show() 
-    
