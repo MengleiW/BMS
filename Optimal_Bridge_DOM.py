@@ -396,7 +396,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
             #print('q21=',q21)
             q1 = np.exp(q11) / (N1*np.exp(q11) + N2*Zhat*np.exp(q21))
             Q1.append(q1)
-            
+            #print('Q1=',Q1)
          for j2 in range(N2):   
             #Finding Q12
             q12 = target_function(method,tht2[j2], initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp)
@@ -417,11 +417,11 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          #print('Q1=',np.sum(Q1))
          #print('Q2=',np.sum(Q2))
          if not Z: 
-             zhat = np.sum(Q1) - np.sum(Q2)
+             zhat = np.sum(Q1) / np.sum(Q2)
          else:
-             zhat = np.sum(Q1) - np.sum(Q2) * Z[-1]  
+             zhat = (np.sum(Q1) / np.sum(Q2) )* Z[-1]  
          Z.append(zhat)
-         #print("error_check = ",Z)
+         print("error_check = ",Z)
 
     return Z[-1]
 
@@ -445,7 +445,7 @@ def Slove_Z_Bridge(method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
     results = []
     for i in range(N):#check_points:
         Z = OptimalBridge (method,initial_conditions, T[:i+1], k, data,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-        print(Z)
+        #print(Z)
         results.append(Z)
 
     return results 
@@ -525,3 +525,4 @@ if __name__ == '__main__':
     #plt.title('Z_t,Z_e')
     #plt.tight_layout()
     #plt.show() 
+    
