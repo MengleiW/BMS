@@ -244,7 +244,7 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, s
             
             simulated_data = method(gamma, k,initial_conditions, T)
             #print("data=",simulated_data)
-            ll = calculate_combined_log_likelihood(simulated_data, observed_y[i], observed_yp[i], sigma_y, sigma_yp)
+            ll = np.exp(calculate_combined_log_likelihood(simulated_data, observed_y[i], observed_yp[i], sigma_y, sigma_yp))
             Z_t.append(ll)
             
         #if i % 5 == 0:
