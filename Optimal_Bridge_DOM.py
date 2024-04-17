@@ -234,13 +234,19 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, s
         results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
     """
     Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
-    Zhat = np.log(Zhat)
-    results = []
+    
+    results = [Zhat]
     
     # Assuming you want to use this index to start further calculations
-    for i in range(Timepoint_of_interest, N):
-        simulated_data = method(gamma, k,initial_conditions, T)
-        combined_log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y[i], observed_yp[i], sigma_y, sigma_yp)
+    for i in range(Timepoint_of_interest+1, N):
+        Z_t = []
+        for gamma in gammas:
+            
+            simulated_data = method(gamma, k,initial_conditions, T)
+            #print("data=",simulated_data)
+            ll = calculate_combined_log_likelihood(simulated_data, observed_y[i], observed_yp[i], sigma_y, sigma_yp)
+            Z_t.append(ll)
+            
         #if i % 5 == 0:
             #Zhat = HM_FindZ(combined_log_likelihood, len(gammas))
             #results.append(Zhat)
@@ -248,7 +254,7 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, s
             
         
         #log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
-        Zhat = Zhat + np.sum(np.exp(combined_log_likelihood))*(gammas[1] - gammas[0])
+        Zhat = Zhat *np.sum(Z_t)/(N-Timepoint_of_interest)
         #Zhat = 1/np.exp(log_Zhat)
         results.append(Zhat)
 
@@ -389,7 +395,7 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
          
          for j1 in range(N1):
             #Finding Q11
-            q11 =  target_function(method,tht1[j1],initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp)#[]
+            q11 =  target_function(method,tht1[j1],initial_conditions, T, k, observed_y, observed_yp, sigma_y, sigma_yp)
             #print('q11=',q11)
             #Finding Q21
             q21 = scipy.stats.multivariate_normal.logpdf(tht1[j1], cov=np.eye(len(tht1)) * 0.3)
@@ -414,14 +420,14 @@ def OptimalBridge (method,initial_conditions,T, k, data,N,N1,N2, check_points,ga
           #q12 = np.maximum(q12, epsilon)y
           #q21 = np.maximum(q21, epsilon)
           #q22 = np.maximum(q22, epsilon)
-         print('Q1=',np.sum(Q1))
-         print('Q2=',np.sum(Q2))
+         #print('Q1=',np.sum(Q1))
+         #print('Q2=',np.sum(Q2))
          if not Z: 
              zhat = np.sum(Q1) / np.sum(Q2)
          else:
              zhat = (np.sum(Q1) / np.sum(Q2) )* Z[-1]  
          Z.append(zhat)
-         print("error_check = ",Z)
+         #print("error_check = ",Z)
 
     return Z[-1]
 
@@ -462,17 +468,17 @@ if __name__ == '__main__':
     number_of_gammas = 10
     Dimention_of_parameter_space = 1
     gammas = np.linspace(0, 1, 10)
-    T = np.linspace(0, 10, 10)
+    T = np.linspace(0, 10, 100)
     check_points = [1,5,8]
     
     Timepoint_of_interest=0
-    N = 10
+    N = 100
     N1 = 10
     N2 = 10
     sigma_y = 0.3 
     sigma_yp = 0.1
-    noise_level_s = 0.0001
-    noise_level_j = 0.01
+    noise_level_s = 0.01
+    noise_level_j = 0.5
     
     
     gamma = 0.1
@@ -486,14 +492,12 @@ if __name__ == '__main__':
     
     Z_e1 = Slove_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
     Z_t1 = Slove_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    #Z_e2 = iterative_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    #Z_t2 = iterative_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    Z_e2 = Slove_Z_Bridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    Z_t2 = Slove_Z_Bridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    #Z_e2 = OptimalBridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    #Z_t2 = OptimalBridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    print("Z_e contents:", Z_e1)
-    print("Length of Z_e:", len(Z_e1))
+    Z_e2 = iterative_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_t2 = iterative_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    #Z_e2 = Slove_Z_Bridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    #Z_t2 = Slove_Z_Bridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
+    print("Z_e contents:", Z_e2)
+    print("Length of Z_e:", len(Z_e2))
     print("Z_t contents:", Z_t1)
     print("Length of Z_t:", len(Z_t1))
     
