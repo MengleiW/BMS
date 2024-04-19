@@ -238,13 +238,13 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, s
     results = [Zhat]
     
     # Assuming you want to use this index to start further calculations
-    for i in range(Timepoint_of_interest+1, N):
+    for i in range(Timepoint_of_interest+1, len(T)):
         Z_t = []
         for gamma in gammas:
             
-            simulated_data = method(gamma, k,initial_conditions, T)
+            simulated_data = method(gamma, k,initial_conditions, T[:i+1])
             #print("data=",simulated_data)
-            ll = np.exp(calculate_combined_log_likelihood(simulated_data, observed_y[i], observed_yp[i], sigma_y, sigma_yp))
+            ll = np.exp(calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1], sigma_y, sigma_yp))
             Z_t.append(ll)
             
         #if i % 5 == 0:
@@ -252,14 +252,14 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, s
             #results.append(Zhat)
         #else:
             
-        
+        print("check",np.sum(Z_t)/(N-Timepoint_of_interest))
         #log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
-        Zhat = Zhat *np.sum(Z_t)/(N-Timepoint_of_interest)
+        Zhat *= np.mean(Z_t)
         #Zhat = 1/np.exp(log_Zhat)
         results.append(Zhat)
 
     return results  
-        
+   
 
 
 def Metropolis_hasting(method,gammas,initial_conditions,T, k, observed_y, observed_yp, sigma_y, sigma_yp,M,m,target_Function,proposal_Function ):
@@ -468,16 +468,16 @@ if __name__ == '__main__':
     number_of_gammas = 10
     Dimention_of_parameter_space = 1
     gammas = np.linspace(0, 1, 10)
-    T = np.linspace(0, 10, 100)
+    T = np.linspace(0, 10, 10)
     check_points = [1,5,8]
     
     Timepoint_of_interest=0
-    N = 100
+    N = 10
     N1 = 10
     N2 = 10
     sigma_y = 0.3 
     sigma_yp = 0.1
-    noise_level_s = 0.01
+    noise_level_s = 0.1
     noise_level_j = 0.5
     
     
@@ -496,10 +496,10 @@ if __name__ == '__main__':
     Z_t2 = iterative_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
     #Z_e2 = Slove_Z_Bridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
     #Z_t2 = Slove_Z_Bridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    print("Z_e contents:", Z_e2)
-    print("Length of Z_e:", len(Z_e2))
-    print("Z_t contents:", Z_t1)
-    print("Length of Z_t:", len(Z_t1))
+    print("Z_e contents:", Z_t1)
+    print("Length of Z_e:", len(Z_t1))
+    print("Z_t contents:", Z_t2)
+    print("Length of Z_t:", len(Z_t2))
     
     #graphing
     #checkpoints = list(range(1, len(Z_e) + 1)) 
