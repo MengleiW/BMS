@@ -122,14 +122,19 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, noise_
     #ll = np.zeros(simulated.shape[0])
     half = N // 2 
     #for i in range(simulated.shape[0]):
-    residuals_y = observed_y - simulated[:,0]
-    print("residuals=",residuals_y)
+    
     #residuals_yp = observed_yp - simulated[:,1]
-
-    ll_y1 = scipy.stats.norm.logpdf(residuals_y[:half], scale=noise_level_s)
-    ll_y2 = scipy.stats.norm.logpdf(residuals_y[half:], scale=noise_level_j)
+    for i in range(len(observed_y)):
+        if i < half:
+            noise_level = noise_level_s
+        else:
+            noise_level = noise_level_j
+        residuals_y = observed_y - simulated[:,0]
+        print("residuals=",residuals_y)
+        ll_y1 = scipy.stats.norm.logpdf(residuals_y[i], scale=noise_level)
+        
         #ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
-    ll_y = np.concatenate([ll_y1, ll_y2])
+    ll_y = ll_y1 #np.concatenate([ll_y1, ll_y2])
     ll = ll_y #+ ll_yp
 
     return ll
