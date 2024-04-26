@@ -40,9 +40,9 @@ def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, n
     """
     t = np.linspace(ts[0], ts[1], N)
     sol = scipy.integrate.solve_ivp(damped_oscillator, ts, initial_conditions, args=(gamma, k), t_eval=t)
-    half = N // 2
     y = sol.y[0]
-    yp = sol.y[1]  
+    yp = sol.y[1]
+    half = N // 2
     # Apply smooth noise to the first half and jumpy noise to the second half
     noise1 = np.concatenate([np.random.normal(0, noise_level_s,  half),
                              np.random.normal(0, noise_level_j, N -  half)])
@@ -104,7 +104,7 @@ def trapezoidal_method(gammas, k, y0, T):
     return y
 
 
-def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_y, sigma_yp):
+def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, noise_level_s, noise_level_j):
     """
     Computes the combined log-likelihood of the observed position and velocity data for a given simulated dataset.
     And since we are intrest both
@@ -112,23 +112,25 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, sigma_
         simulated: Array, the simulated data from the model.
         observed_y: Array, observed data for position (y).
         observed_yp: Array, observed data for velocity (y').
-        sigma_y: Float, standard deviation of error in position measurements.
-        sigma_yp: Float, standard deviation of error in velocity measurements.
+        noise_level_s: Float, standard deviation of noise for the first half of the data.
+        noise_level_j: Float, standard deviation of noise for the second half of the data.
 
     Outputs:
         log_likelihood: Float, the combined log-likelihood value of the observed data given the simulated model outputs.
 
     """
-    ll = np.zeros(simulated.shape[0])
+    #ll = np.zeros(simulated.shape[0])
+    half = N // 2 
+    #for i in range(simulated.shape[0]):
+    residuals_y = observed_y - simulated[:,0]
+    print("residuals=",residuals_y)
+    #residuals_yp = observed_yp - simulated[:,1]
 
-    for i in range(simulated.shape[0]):
-        residuals_y = observed_y - simulated[i,  0]
-        #residuals_yp = observed_yp - simulated[i, 1]
-
-        ll_y = np.sum(scipy.stats.norm.logpdf(residuals_y, scale=sigma_y))
+    ll_y1 = scipy.stats.norm.logpdf(residuals_y[:half], scale=noise_level_s)
+    ll_y2 = scipy.stats.norm.logpdf(residuals_y[half:], scale=noise_level_j)
         #ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
-
-        ll[i] = ll_y #+ ll_yp
+    ll_y = np.concatenate([ll_y1, ll_y2])
+    ll = ll_y #+ ll_yp
 
     return ll
 
@@ -159,37 +161,12 @@ def HM_FindZ(log_likelihood, N):
     
     
     # Exponentiate to get Zhat, if necessary. Otherwise, return log_Zhat based on use case.
-    Zhat = 1/Zhat
+    #Zhat = 1/Zhat
 
     return Zhat
 
-def Saved_DATA(method, gammas, initial_conditions, T, k):
-    """
-    Simulates and saves data for a range of parameter values over specified time points using a numerical method.
 
-    Inputs:
-        method: Function, the numerical method used for simulating the model (e.g., Euler forward or trapezoidal).
-        gammas: Array, range of parameter values (e.g., damping coefficients) to be tested.
-        initial_conditions: Array, initial state of the system (usually includes initial position and velocity).
-        T: Array, time points for which the data is to be simulated.
-        k: Float, a parameter of the system (e.g., stiffness coefficient in a damped oscillator model).
-        
-    Outputs:
-        data: 3D Array, where each element contains the simulated system states for each value of gamma at each time point.
-    """
-    
-    data = np.zeros((len(T),len(gammas), 2))
-    data[:, 0, :] = initial_conditions 
-    
-    #ll = np.zeros(len(T))
-    
-    for i, gamma in enumerate(gammas): 
-        data[:, i, :] = method(gammas, k,initial_conditions, T)
-        #combined_log_likelihood = calculate_combined_log_likelihood(data[:, i, :], observed_y, observed_yp, sigma_y, sigma_yp)
-        #ll[i]=combined_log_likelihood
-        
-    return  data#, ll
-def Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp):
+def Slove_Z(method,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j):
     """
     Computes the marginal likelihood estimates (Z) for specified checkpoints with data saved.
     
@@ -205,19 +182,23 @@ def Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_
     Outputs:
         results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
     """
-        
+    half = N // 2    
     results = []
-    for i in range(len(T)):#check_points:
+    for i in range(len(T)):
+        log_likelihoods = []
         for gamma in gammas:
-            simulated_data = method(gamma, k,initial_conditions, T)
-            combined_log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y[i], observed_yp[i], sigma_y, sigma_yp)
-        Z = HM_FindZ(combined_log_likelihood, len(gammas))
+            log_likelihood = 1
+            simulated_data = method(gamma, k,initial_conditions, T[:i+1])
+            #print("simulated_data1=",simulated_data)
+            log_likelihood = np.sum(calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1], noise_level_s, noise_level_j))
+            log_likelihoods.append(log_likelihood)
+        Z = HM_FindZ(log_likelihoods, len(gammas))
         results.append(Z)
-    
+   
     return results 
 
 
-def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest):
+def iterative_Z (method,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j,Timepoint_of_interest):
     """
     Computes the marginal likelihood estimates (Z) using P(y_{t+1},...,y_1|M) = P(y_{t+1}|y_t,...,y_1,M)P(M | y_t,...,y_1)
     
@@ -233,10 +214,10 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, s
     Outputs:
         results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
     """
-    Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)[Timepoint_of_interest]
+    Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j)[Timepoint_of_interest]
     
     results = [Zhat]
-    
+    half = N // 2
     # Assuming you want to use this index to start further calculations
     for i in range(Timepoint_of_interest+1, len(T)):
         Z_t = []
@@ -244,18 +225,12 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, sigma_y, s
             
             simulated_data = method(gamma, k,initial_conditions, T[:i+1])
             #print("data=",simulated_data)
-            ll = np.exp(calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1], sigma_y, sigma_yp))
+            ll = calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1],noise_level_s, noise_level_j)[-1]
+            print("ll=",ll)
             Z_t.append(ll)
-            
-        #if i % 5 == 0:
-            #Zhat = HM_FindZ(combined_log_likelihood, len(gammas))
-            #results.append(Zhat)
-        #else:
-            
-        print("check",np.sum(Z_t)/(N-Timepoint_of_interest))
-        #log_Zhat = log_Zhat + scipy.special.logsumexp(combined_log_likelihood) /N
-        Zhat *= np.mean(Z_t)
-        #Zhat = 1/np.exp(log_Zhat)
+        
+        Zhat = HM_FindZ(Z_t, len(gammas))
+        
         results.append(Zhat)
 
     return results  
@@ -484,12 +459,7 @@ if __name__ == '__main__':
     gamma = 0.1
     observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0,100], N, noise_level_s, noise_level_j)
     
-    # Compute marginal likelihoods for each method
-    data_e = Saved_DATA(euler_forward, gammas, initial_conditions, T, k) 
-    #print("Z_e = ",Z_e)
-    data_t = Saved_DATA(trapezoidal_method, gammas, initial_conditions, T, k)
-    #print("Z_t = ",Z_t)
-    
+
     Z_e1 = Slove_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
     Z_t1 = Slove_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
     Z_e2 = iterative_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
@@ -502,6 +472,22 @@ if __name__ == '__main__':
     print("Length of Z_t:", len(Z_t2))
     
     #graphing
+    checkpoints = list(range(N))
+
+    plt.figure(figsize=(12, 6))
+
+    # Plotting Z_e1 and Z_t1
+    plt.plot(checkpoints, observed_y, label='y', marker='o', linestyle='-', color='blue')
+    plt.plot(checkpoints, observed_yp, label='yp', marker='x', linestyle='--', color='green')
+    
+    plt.xlabel('Checkpoints')
+    plt.ylabel('Values')
+    plt.title('Data of y and yp across Checkpoints')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+    
     #checkpoints = list(range(1, len(Z_e) + 1)) 
     checkpoints = list(range(N))
 
