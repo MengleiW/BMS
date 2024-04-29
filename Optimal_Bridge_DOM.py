@@ -241,8 +241,22 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, noise_leve
             simulated_data = method(gamma, k,initial_conditions, T[:i+1])
             #print("sdata=",simulated_data)
             #print("odata=", observed_y[:i+1])
-           
-            ll = calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1],noise_level_s, noise_level_j)[-1]
+            #log_likelihood = calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1], noise_level_s, noise_level_j)[-1]
+            ll = 0
+            half = N // 2 
+            #for i in range(simulated.shape[0]):
+            
+            #residuals_yp = observed_yp - simulated[:,1]
+            
+            if i < half:
+                noise_level = noise_level_s
+            else:
+                noise_level = noise_level_j
+                
+            residuals_y = observed_y[i] - simulated_data[i,0]
+                #print("residuals=", residuals_y )
+            ll =  -0.5 * m * np.log(2 * np.pi) - 0.5 * m * np.log(noise_level**2) \
+                        - 0.5 / (noise_level**2) * np.sum(residuals_y**2)
             
             Z_t.append(ll)
             
