@@ -38,22 +38,26 @@ def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, n
     Outputs:
       (y, yp): list, where y is the position array and yp is the velocity array over the time span.
     """
-    t = np.linspace(ts[0], ts[1], N)
-    sol = scipy.integrate.solve_ivp(damped_oscillator, ts, initial_conditions, args=(gamma, k), t_eval=t)
+    
+    sol = scipy.integrate.solve_ivp(damped_oscillator, ts, initial_conditions, args=(gamma, k), t_eval=T)
+    
     y = sol.y[0]
     yp = sol.y[1]
+    #print("y1=",y)
     half = N // 2
     # Apply smooth noise to the first half and jumpy noise to the second half
     noise1 = np.concatenate([np.random.normal(0, noise_level_s,  half),
                              np.random.normal(0, noise_level_j, N -  half)])
+    
     noise2 = np.concatenate([np.random.normal(0, noise_level_s,  half),
                              np.random.normal(0, noise_level_j, N -  half)])
     y += noise1
+    #print("noise1=",noise1)
     yp += noise2
-    
+    #print("y2=",y)
     return y, yp
 
-def euler_forward(gammas, k, y0, T):
+def euler_forward(gamma, k, y0, T):
     """
     Numerically approximates the solution of the damped oscillator using the Euler forward method for a single time point.
 
@@ -70,14 +74,15 @@ def euler_forward(gammas, k, y0, T):
 
     y = np.zeros((len(T), 2))
     y[0, :] = y0
+    
     if len(T)>1:
         for i, t in enumerate(T[:-1]):
             h = T[i+1] - T[i]
-            y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gammas, k))
+            y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gamma, k))
             
     return y
 
-def trapezoidal_method(gammas, k, y0, T):
+def trapezoidal_method(gamma, k, y0, T):
     """
     Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
 
@@ -96,9 +101,9 @@ def trapezoidal_method(gammas, k, y0, T):
     if len(T)>1:
         for i, t in enumerate(T[:-1]):
             h = T[i+1] - T[i]
-            f_n = np.array(damped_oscillator(t, y[i, :], gammas, k))
+            f_n = np.array(damped_oscillator(t, y[i, :], gamma, k))
             y_pred = y[i, :] + h * f_n
-            f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gammas, k))
+            f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gamma, k))
             y[i + 1, :] = y[i, :] + h / 2 * (f_n + f_n_plus_1)
 
     return y
@@ -119,7 +124,7 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, noise_
         log_likelihood: Float, the combined log-likelihood value of the observed data given the simulated model outputs.
 
     """
-    ll_y = np.zeros(simulated.shape[0])
+    ll = np.zeros(simulated.shape[0])
     half = N // 2 
     #for i in range(simulated.shape[0]):
     
@@ -129,13 +134,16 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, noise_
             noise_level = noise_level_s
         else:
             noise_level = noise_level_j
-        residuals_y = observed_y - simulated[i,0]
-        #print("residuals=",residuals_y)
-        ll_y[i] = scipy.stats.norm.logpdf(residuals_y[i], scale=noise_level)
+        
+        residuals_y = observed_y[i] - simulated[i,0]
+        #print("residuals=", residuals_y )
+        ll[i] =  -0.5 * m * np.log(2 * np.pi) - 0.5 * m * np.log(noise_level**2) \
+                - 0.5 / (noise_level**2) * np.sum(residuals_y**2)
+        #ll[i] = scipy.stats.norm.logpdf(residuals_y, scale=noise_level)
         
         #ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
     #ll_y = ll_y1 np.concatenate([ll_y1, ll_y2])
-    ll = ll_y #+ ll_yp
+    #ll = ll_y #+ ll_yp
     #print("ll=",ll)
     return ll
 
@@ -190,15 +198,19 @@ def Slove_Z(method,check_points,gammas, observed_y, observed_yp, noise_level_s, 
     results = []
     for i in range(len(T)):
         log_likelihoods = []
+        
         for gamma in gammas:
-            log_likelihood = 1
             simulated_data = method(gamma, k,initial_conditions, T[:i+1])
+            
             #print("simulated_data1=",simulated_data)
             log_likelihood = np.sum(calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1], noise_level_s, noise_level_j))
+            
             log_likelihoods.append(log_likelihood)
+            
         Z = HM_FindZ(log_likelihoods, len(gammas))
+        
         results.append(Z)
-   
+    
     return results 
 
 
@@ -219,10 +231,10 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, noise_leve
         results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
     """
     Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j)[Timepoint_of_interest]
-    
+   
     results = [Zhat]
     # Assuming you want to use this index to start further calculations
-    for i in range(Timepoint_of_interest+1, len(T)):
+    for i in range(Timepoint_of_interest+1, len(T-Timepoint_of_interest)):
         Z_t = []
         for gamma in gammas:
             
@@ -233,11 +245,11 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, noise_leve
             ll = calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1],noise_level_s, noise_level_j)[-1]
             
             Z_t.append(ll)
-        
-        Zhat = HM_FindZ(Z_t, len(gammas))
+            
+        Zhat = Zhat*HM_FindZ(Z_t, len(gammas))
         
         results.append(Zhat)
-
+        
     return results  
    
 
@@ -447,33 +459,37 @@ if __name__ == '__main__':
     initial_conditions = [1, 0]
     number_of_gammas = 10
     Dimention_of_parameter_space = 1
-    gammas = np.linspace(0, 1, 10)
-    T = np.linspace(0, 10, 10)
+    gammas = np.linspace(0, 1, number_of_gammas)
+    
+    N = 10
+    T = np.linspace(0, 10, N)
     check_points = [1,5,8]
     
     Timepoint_of_interest=0
-    N = 10
+    
     N1 = 10
     N2 = 10
-    sigma_y = 0.3 
-    sigma_yp = 0.1
+    #sigma_y = 0.3 
+    #sigma_yp = 0.1
     noise_level_s = 0.1
     noise_level_j = 0.5
     
     
-    maga = 0.1
+    maga = 0.3
     observed_y, observed_yp = simulate_observed_data(maga, k, initial_conditions, [0,100], N, noise_level_s, noise_level_j)
     
 
-    Z_e1 = Slove_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    Z_t1 = Slove_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
-    Z_e2 = iterative_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
-    Z_t2 = iterative_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest)
+    Z_e1 = Slove_Z(euler_forward,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j)
+    Z_t1 = Slove_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j)
+    Z_e2 = iterative_Z(euler_forward,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j,Timepoint_of_interest)
+    Z_t2 = iterative_Z(trapezoidal_method,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j,Timepoint_of_interest)
     #Z_e2 = Slove_Z_Bridge(euler_forward, initial_conditions,T, k, data_e,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
     #Z_t2 = Slove_Z_Bridge(trapezoidal_method,initial_conditions,T, k, data_t ,N,N1,N2, check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp,Timepoint_of_interest,Dimention_of_parameter_space)
-    print("Z_e contents:", Z_t1)
+    print("Z_e1 contents:", Z_e1)
+    print("Z_e2 contents:", Z_e2)
     print("Length of Z_e:", len(Z_t1))
-    print("Z_t contents:", Z_t2)
+    print("Z_t1 contents:", Z_t1)
+    print("Z_t2 contents:", Z_t2)
     print("Length of Z_t:", len(Z_t2))
     
     #graphing
