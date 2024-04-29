@@ -73,7 +73,7 @@ def euler_forward(gammas, k, y0, T):
     if len(T)>1:
         for i, t in enumerate(T[:-1]):
             h = T[i+1] - T[i]
-            y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gamma, k))
+            y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gammas, k))
             
     return y
 
@@ -96,9 +96,9 @@ def trapezoidal_method(gammas, k, y0, T):
     if len(T)>1:
         for i, t in enumerate(T[:-1]):
             h = T[i+1] - T[i]
-            f_n = np.array(damped_oscillator(t, y[i, :], gamma, k))
+            f_n = np.array(damped_oscillator(t, y[i, :], gammas, k))
             y_pred = y[i, :] + h * f_n
-            f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gamma, k))
+            f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gammas, k))
             y[i + 1, :] = y[i, :] + h / 2 * (f_n + f_n_plus_1)
 
     return y
@@ -119,24 +119,24 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, noise_
         log_likelihood: Float, the combined log-likelihood value of the observed data given the simulated model outputs.
 
     """
-    #ll = np.zeros(simulated.shape[0])
+    ll_y = np.zeros(simulated.shape[0])
     half = N // 2 
     #for i in range(simulated.shape[0]):
     
     #residuals_yp = observed_yp - simulated[:,1]
-    for i in range(len(observed_y)):
+    for i in range(len(simulated)):
         if i < half:
             noise_level = noise_level_s
         else:
             noise_level = noise_level_j
-        residuals_y = observed_y - simulated[:,0]
-        print("residuals=",residuals_y)
-        ll_y1 = scipy.stats.norm.logpdf(residuals_y[i], scale=noise_level)
+        residuals_y = observed_y - simulated[i,0]
+        #print("residuals=",residuals_y)
+        ll_y[i] = scipy.stats.norm.logpdf(residuals_y[i], scale=noise_level)
         
         #ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
-    ll_y = ll_y1 #np.concatenate([ll_y1, ll_y2])
+    #ll_y = ll_y1 np.concatenate([ll_y1, ll_y2])
     ll = ll_y #+ ll_yp
-
+    #print("ll=",ll)
     return ll
 
 def HM_FindZ(log_likelihood, N):
@@ -186,8 +186,7 @@ def Slove_Z(method,check_points,gammas, observed_y, observed_yp, noise_level_s, 
     
     Outputs:
         results: List, contains the marginal likelihood estimates (Z) for each checkpoint.
-    """
-    half = N // 2    
+    """ 
     results = []
     for i in range(len(T)):
         log_likelihoods = []
@@ -222,16 +221,17 @@ def iterative_Z (method,check_points,gammas, observed_y, observed_yp, noise_leve
     Zhat = Slove_Z(method,check_points,gammas, observed_y, observed_yp, noise_level_s, noise_level_j)[Timepoint_of_interest]
     
     results = [Zhat]
-    half = N // 2
     # Assuming you want to use this index to start further calculations
     for i in range(Timepoint_of_interest+1, len(T)):
         Z_t = []
         for gamma in gammas:
             
             simulated_data = method(gamma, k,initial_conditions, T[:i+1])
-            #print("data=",simulated_data)
+            #print("sdata=",simulated_data)
+            #print("odata=", observed_y[:i+1])
+           
             ll = calculate_combined_log_likelihood(simulated_data, observed_y[:i+1], observed_yp[:i+1],noise_level_s, noise_level_j)[-1]
-            print("ll=",ll)
+            
             Z_t.append(ll)
         
         Zhat = HM_FindZ(Z_t, len(gammas))
@@ -461,8 +461,8 @@ if __name__ == '__main__':
     noise_level_j = 0.5
     
     
-    gamma = 0.1
-    observed_y, observed_yp = simulate_observed_data(gamma, k, initial_conditions, [0,100], N, noise_level_s, noise_level_j)
+    maga = 0.1
+    observed_y, observed_yp = simulate_observed_data(maga, k, initial_conditions, [0,100], N, noise_level_s, noise_level_j)
     
 
     Z_e1 = Slove_Z(euler_forward,check_points,gammas, observed_y, observed_yp, sigma_y, sigma_yp)
