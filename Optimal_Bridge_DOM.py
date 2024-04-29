@@ -472,7 +472,7 @@ if __name__ == '__main__':
     k = 0.5
     initial_conditions = [1, 0]
     number_of_gammas = 10
-    Dimention_of_parameter_space = 1
+    Dimenion_of_parameter_space = 1
     gammas = np.linspace(0, 1, number_of_gammas)
     
     N = 10
