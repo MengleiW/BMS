@@ -145,6 +145,7 @@ T = 10
 # Plot all realization of the damped oscillator
 # 
 fig, ax = plt.subplots()
+fig.set_size_inches(6, 3)
 t = np.linspace(0, 10, 1000)  # resolution of the reference solution
 
 # Solve the ODE for each value of gma
@@ -153,7 +154,6 @@ for gma in gmas:
     ax.plot(t, y(t)[0], linewidth=0.5, color='black')
 ax.set_xlabel('Time')
 ax.set_ylabel('Position')
-plt.grid()
 
 # Compute the reference (true) solution
 gma_true = 0.5
@@ -176,8 +176,11 @@ vps = ax.violinplot(data, positions=t_meas, widths=0.1, showmeans=False, showext
                     showmedians=False)
 for vp in vps['bodies']:
     vp.set_facecolor('#D43F3A')
-    vp.set_alpha(0.7)
+    vp.set_alpha(1)
 plt.legend()
+#plt.grid()
+plt.tight_layout()
+plt.savefig('/home/hans-werner/Dropbox/work/research/projects/bayesian_model_selection/notes/figs/ex01_samples_plus_measurements.pdf')
 #plt.show()
 
 
@@ -195,6 +198,7 @@ y_tr = trapezoidal_rule(t_disc, y0, k, gma_true, m, f)
 
 # Plot the solutions
 fig, ax = plt.subplots()
+fig.set_size_inches(6, 3)
 plt.plot(t_disc, y_fe[:,0], '.-', label='Forward Euler')
 plt.plot(t_disc, y_tr[:,0], '.-',label='Trapezoidal rule')
 plt.plot(t, y_true(t)[0], label='True solution')
@@ -202,9 +206,10 @@ plt.scatter(t_meas, y_meas, color='red', s=25, label='Measurements')
 plt.grid()
 plt.xlabel('Time')
 plt.ylabel('Position')  
-plt.title('True Damping Coefficient Value: {}'.format(gma_true))
+#plt.title('True Damping Coefficient Value: {}'.format(gma_true))
 plt.legend()
-
+fig.tight_layout()
+plt.savefig('/home/hans-werner/Dropbox/work/research/projects/bayesian_model_selection/notes/figs/ex01_true_solution_and_approximation.pdf')
 # Compute the model evidence based on the measurements
 #
 # 
@@ -274,10 +279,11 @@ for i in range(n_meas):
 
 # Plot the model evidence as a function of measurement time
 fig, ax = plt.subplots(2,1)
+fig.set_size_inches(6, 6)
 ax[0].plot(t_meas, Z_cum_fe, '.-', label='Forward Euler')
 ax[0].plot(t_meas, Z_cum_trap, '.-', label='Trapezoidal rule')
-ax[0].plot(t_meas, Z_up_fe, '--', label='Forward Euler (updating)')
-ax[0].plot(t_meas, Z_up_trap, '--', label='Trapezoidal rule (updating)')
+#ax[0].plot(t_meas, Z_up_fe, '--', label='Forward Euler (updating)')
+#ax[0].plot(t_meas, Z_up_trap, '--', label='Trapezoidal rule (updating)')
 ax[0].grid()
 ax[0].set_xlabel('Measurement time')
 ax[0].set_ylabel('Model evidence')
@@ -289,7 +295,7 @@ ax[1].set_xlabel('Measurement time')
 ax[1].set_ylabel('Bayes factor')
 ax[1].legend()
 plt.tight_layout()
-plt.show()
+fig.savefig('/home/hans-werner/Dropbox/work/research/projects/bayesian_model_selection/notes/figs/ex01_model_evidence.pdf')
 
 
 
