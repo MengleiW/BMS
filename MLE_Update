@@ -3,6 +3,9 @@ import scipy
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 import torch
+from scipy.misc import derivative
+import numdifftools as nd
+
 
 
 def damped_oscillator(t, y, gamma, k):
@@ -73,9 +76,9 @@ def euler_forward(gamma, k, y0, t, h):
       y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
     """
 
-    y_t_puls_one = y0 + h * np.array(damped_oscillator(t, y0, gamma, k))
-    return y_t_puls_one
-
+    y_t_plus_one = y0 + h * np.array(damped_oscillator(t, y0, gamma, k))
+    print(f"Euler Method: gamma={gamma}, y0={y0}, y_t_plus_one={y_t_plus_one}")  # Debugging statement
+    return y_t_plus_one
 
 def trapezoidal_method(gamma, k, y0, t, h ):
     """
@@ -101,8 +104,8 @@ def trapezoidal_method(gamma, k, y0, t, h ):
 
 def log_likelihood(simulated, observed_y,  noise_level):
     """
-    Computes the combined log-likelihood of the observed position and velocity data for a given simulated dataset.
-    And since we are intrest both
+    Computes the combined log-likelihood of the observed position data for a given simulated dataset.
+  
     Inputs:
         simulated: Array, the simulated data from the model.
         observed_y: Array, observed data for position (y).
@@ -115,14 +118,18 @@ def log_likelihood(simulated, observed_y,  noise_level):
 
     """
     
-    residuals = observed_y - simulated
-    ll = -np.sum(residuals**2) / (2 * noise_level**2)
+    residuals = observed_y - simulated[0]
+    #print("residuals=", residuals)
+    #print("observed_y=", observed_y) 
+    #print(" simulated[0]=",  simulated[0])
+    ll = -0.5 * np.log(2 * np.pi) - 0.5 * np.log(noise_level ** 2) - 0.5 / (noise_level ** 2) * (residuals ** 2)
+    #print("Log-likelihood", ll)  
     return ll
 
 
 
 
-def gradient_log_likelihood_euler(gamma, observed_y, noise_level, k, y0,t, h, Z_t):
+def gradient_log_likelihood_euler(gamma, observed_y, noise_level, k, y0,t, h):
     """
     Computes the gradient of the log-likelihood with respect to the damping coefficient gamma using the Euler forward method.
 
@@ -141,16 +148,18 @@ def gradient_log_likelihood_euler(gamma, observed_y, noise_level, k, y0,t, h, Z_
         grad_ll: Float, the gradient of the log-likelihood with respect to gamma.
     """
     y = euler_forward(gamma, k, y0, t, h)
+    #grad_ll = np.gradient(y, gamma)
     ll_gamma = log_likelihood(y, observed_y, noise_level)
     y_plus_h = euler_forward(gamma + h, k, y0, t, h)
     ll_gamma_h = log_likelihood(y_plus_h, observed_y, noise_level)
     grad_ll = (ll_gamma_h - ll_gamma) / h
+    
     return grad_ll
 
 
 
 
-def gradient_log_likelihood_trapezoidal(gamma, observed_y, noise_level, k, y0, t, h, Z_t):
+def gradient_log_likelihood_trapezoidal(gamma, observed_y, noise_level, k, y0, t, h):
     """
    Computes the gradient of the log-likelihood with respect to the damping coefficient gamma using the trapezoidal method.
 
@@ -243,9 +252,8 @@ def gradient_descent(log_likelihood, grad_log_likelihood, gamma_init, observed_y
     
     
     for i in range(maximum_iteration):
-        
-        gradient = grad_log_likelihood(gamma, observed_y, noise_level, k, y0,t, h, Z_t)
-        if np.isnan(gradient).any():
+        gradient = grad_log_likelihood(gamma, observed_y, noise_level, k, y0, t, h, Z_t)
+        if np.isnan(gradient):
             print(f"Gradient contains NaN values at iteration {i}: {gradient}")
             break
         
@@ -254,11 +262,14 @@ def gradient_descent(log_likelihood, grad_log_likelihood, gamma_init, observed_y
         eta = eta_init
         while True:
             gamma_new = gamma - eta * gradient
+            print("gamma_new",gamma_new)
+            print("eta",eta)
+            #sipu.optimaize
             #np.clip does the job of if the vaule is over the max or min, it will replace the it with the closest one.
-            gamma_new = np.clip(gamma_new, 0, 1)
+            #gamma_new = np.clip(gamma_new, 0, 1)
             # Wolfe conditions: Armijo rule and curvature condition
-            armijo_condition = log_likelihood(method(gamma_new, k, y0, t, h), observed_y, noise_level) <= log_likelihood(method(gamma, k, y0, t, h), observed_y, noise_level) + c1 * eta * gradient * (-gradient)
-            curvature_condition = grad_log_likelihood(gamma_new, observed_y, noise_level, k, y0, t, h, Z_t) * (-gradient) >= c2 * gradient * (-gradient)
+            armijo_condition = log_likelihood(method(gamma_new, k, y0, t, h), observed_y, noise_level) <= log_likelihood(method(gamma, k, y0, t, h), observed_y, noise_level) + c1 * eta * gradient **2
+            curvature_condition = grad_log_likelihood(gamma_new, observed_y, noise_level, k, y0, t, h, Z_t) * (-gradient) >= c2 * gradient **2
             
             # Adjust eta based on Wolfe conditions
             if armijo_condition and curvature_condition:
@@ -272,11 +283,41 @@ def gradient_descent(log_likelihood, grad_log_likelihood, gamma_init, observed_y
             break    
     return gamma
 
-
-
-def fisher_information(log_likelihood, gamma, observed_y, noise_level, k, y0, h, Z_t, t,method):
+def optimize_gamma(log_likelihood, grad_log_likelihood, gamma_init, observed_y, noise_level, k, y0, t, h, method):
+    result = scipy.optimize.minimize(
+        fun=lambda gamma: -log_likelihood(method(gamma, k, y0, t, h), observed_y, noise_level),
+        x0=gamma_init,
+        jac=lambda gamma: -grad_log_likelihood(gamma, observed_y, noise_level, k, y0, t, h),
+        bounds=[(0, 1)],
+        method='L-BFGS-B'
+    )
+    #print(f"Optimization result: {result}")  # Debugging statement
+    return result.x
+def central_difference_second_derivative(f, x, h=1e-5):
     """
-    Calculates the Fisher information matrix.
+    Estimate the second derivative of a function using the central difference method.
+    Inputs:
+        f: Function for which to compute the second derivative.
+        x: Point at which to compute the second derivative.
+        h: Step size for the central difference method.
+    Outputs:
+        second_derivative: Estimated second derivative of the function at x.
+    """
+    f_x_plus_h = f(x + h)
+    f_x_minus_h = f(x - h)
+    f_x = f(x)
+    second_derivative = (f_x_plus_h - 2 * f_x + f_x_minus_h) / (h ** 2)
+    
+    print(f"f_x_plus_h: {f_x_plus_h}, f_x: {f_x}, f_x_minus_h: {f_x_minus_h}, second_derivative: {second_derivative}")
+    
+    return second_derivative
+    
+    print(f"f_x_plus_h: {f_x_plus_h}, f_x: {f_x}, f_x_minus_h: {f_x_minus_h}, second_derivative: {second_derivative}")
+    
+    return second_derivative
+def fisher_information(log_likelihood, gamma, observed_y, noise_level, k, y0, t, h, method):
+    """
+    Calculates the Fisher information using numerical differentiation.
 
     Inputs:
         log_likelihood: Function to compute the log-likelihood.
@@ -285,24 +326,34 @@ def fisher_information(log_likelihood, gamma, observed_y, noise_level, k, y0, h,
         noise_level: Float, standard deviation of noise for the data.
         k: Float, stiffness coefficient.
         y0: List, initial conditions of the system.
-        h: Float,times step length.
-        Z_t: Normalizing constant.
+        t: Float, current time.
+        h: Float, time step length.
         method: Numerical method for simulation (e.g., euler_forward or trapezoidal_method).
 
     Outputs:
         fisher_info: Float, the Fisher information value.
     """
-    #perturbation value
-    epsilon = 1e-5
     
-    y_gamma = method(gamma, k, y0, t, h)
-    y_gamma_plus_epsilon = method(gamma + epsilon, k, y0, t, h)
-    y_gamma_minus_epsilon = method(gamma - epsilon, k, y0, t, h)
-    ll_gamma = log_likelihood(y_gamma, observed_y, noise_level)
-    ll_gamma_plus_epsilon = log_likelihood(y_gamma_plus_epsilon, observed_y, noise_level)
-    ll_gamma_minus_epsilon = log_likelihood(y_gamma_minus_epsilon, observed_y, noise_level)
-    fisher_info = (ll_gamma_plus_epsilon - 2 * ll_gamma + ll_gamma_minus_epsilon) / (epsilon**2)
-    return 1 / (-fisher_info)
+    
+    def ll(y_gamma):
+        y_gamma = method(gamma, k, y0, t, h)
+        ll_value = log_likelihood(y_gamma, observed_y, noise_level)
+        print(f"y_gamma: {y_gamma}, ll_value: {ll_value}") 
+        return ll_value
+    #second_derivative = derivative(ll, gamma, dx=1e-5, n=2)
+    #Compute the second derivative using numdifftools
+    #hessian = nd.Hessian(ll, step=1e-5)
+    #second_derivative = hessian(gamma)[0, 0]
+    
+    
+    second_derivative = central_difference_second_derivative(ll, gamma)
+    print(f"second_derivative: {second_derivative}")
+    
+ 
+    if np.isnan(second_derivative) or second_derivative >= 0:
+        return np.inf
+
+    
 
 def find_POST_t(gamma_init, observed_y, noise_level, N, k, y0, T, tol, eta_init, c1, c2, M=2):
     """
@@ -332,29 +383,28 @@ def find_POST_t(gamma_init, observed_y, noise_level, N, k, y0, T, tol, eta_init,
     MLE_t = gamma_init
     P_e = [0.5]
     P_t = [0.5]
-    gamma_min, gamma_max = 0, 1
+    
     number_of_gammas = 10
     
     for t in range(1, len(T)):
+        print("ttime step=",t)
         h = T[t] - T[t - 1]
         observed_y_t = observed_y[t]
         y0 = [observed_y[t - 1], 0] 
                 
-        MLE_e = gradient_descent(log_likelihood, gradient_log_likelihood_euler, P_e[-1], observed_y_t, noise_level, k, y0, T[t - 1], h, Z_t[-1], tol, eta_init, c1, c2, euler_forward)
-        MLE_t = gradient_descent(log_likelihood, gradient_log_likelihood_trapezoidal, P_t[-1], observed_y_t, noise_level, k, y0, T[t - 1], h, Z_t[-1], tol, eta_init, c1, c2, trapezoidal_method)
+        MLE_e = optimize_gamma(log_likelihood, gradient_log_likelihood_euler, P_e[-1], observed_y_t, noise_level, k, y0, T[t - 1], h, euler_forward)
+        MLE_t = optimize_gamma(log_likelihood, gradient_log_likelihood_trapezoidal, P_t[-1], observed_y_t, noise_level, k, y0, T[t - 1], h, trapezoidal_method)
         print("MLE_e = ", MLE_e)
         print("MLE_t = ", MLE_t)
 
-        MLE_e = np.clip(MLE_e, gamma_min, gamma_max)
-        MLE_t = np.clip(MLE_t, gamma_min, gamma_max)
+       
 
-        fisher_e = fisher_information(log_likelihood, MLE_e, observed_y_t, noise_level, k, y0, T[t - 1], h, Z_t[-1], euler_forward)
-        fisher_t = fisher_information(log_likelihood, MLE_t, observed_y_t, noise_level, k, y0, T[t - 1], h, Z_t[-1], trapezoidal_method)
+        fisher_e = fisher_information(log_likelihood, MLE_e, observed_y_t, noise_level, k, y0, T[t - 1], h, euler_forward)
+        fisher_t = fisher_information(log_likelihood, MLE_t, observed_y_t, noise_level, k, y0, T[t - 1], h, trapezoidal_method)
         print("fisher_e = ", fisher_e)
         print("fisher_t = ", fisher_t)
         if np.any(fisher_e <= 0) or np.any(fisher_t <= 0):
             break
-
         posterior_e = scipy.stats.norm(loc=MLE_e, scale=np.sqrt(1 / fisher_e))
         posterior_t = scipy.stats.norm(loc=MLE_t, scale=np.sqrt(1 / fisher_t))
         print("posterior_e=", posterior_e)
