@@ -77,7 +77,7 @@ def euler_forward(gamma, k, y0, t, h):
     """
 
     y_t_plus_one = y0 + h * np.array(damped_oscillator(t, y0, gamma, k))
-    print(f"Euler Method: gamma={gamma}, y0={y0}, y_t_plus_one={y_t_plus_one}")  # Debugging statement
+    print(f"Euler Method: gamma={h}, y0={damped_oscillator(t, y0, gamma, k)}, y_t_plus_one={y_t_plus_one}")  # Debugging statement
     return y_t_plus_one
 
 def trapezoidal_method(gamma, k, y0, t, h ):
@@ -185,36 +185,6 @@ def gradient_log_likelihood_trapezoidal(gamma, observed_y, noise_level, k, y0, t
     return grad_ll
 
 
-def gradient_log_likelihood_euler_pt(gamma, observed_y, noise_level, k, y0, T, Z):
-    gamma_torch = torch.tensor(gamma, requires_grad=True, dtype=torch.float32)
-    observed_y_torch = torch.tensor(observed_y, dtype=torch.float32)
-    noise_level_torch = torch.tensor(noise_level, dtype=torch.float32)
-
-    predicted_y = euler_forward(gamma_torch, k, y0, T)
-    predicted_y = torch.tensor(predicted_y[:, 0], dtype=torch.float32)
-    
-    loss = log_likelihood(predicted_y, observed_y_torch, noise_level_torch)
-    loss.backward()
-    
-    gradient = gamma_torch.grad.item()
-    
-    return gradient
-
-
-def gradient_log_likelihood_trapezoidal_pt(gamma, observed_y, noise_level, k, y0, T, Z):
-    gamma_torch = torch.tensor(gamma, requires_grad=True, dtype=torch.float32)
-    observed_y_torch = torch.tensor(observed_y, dtype=torch.float32)
-    noise_level_torch = torch.tensor(noise_level, dtype=torch.float32)
-
-    predicted_y = trapezoidal_method(gamma_torch, k, y0, T)
-    predicted_y = torch.tensor(predicted_y[:, 0], dtype=torch.float32)
-    
-    loss = log_likelihood(predicted_y, observed_y_torch, noise_level_torch)
-    loss.backward()
-    
-    gradient = gamma_torch.grad.item()
-    
-    return gradient
 
 
 
@@ -386,6 +356,10 @@ def find_POST_t(gamma_init, observed_y, noise_level, N, k, y0, T, tol, eta_init,
     
     number_of_gammas = 10
     
+    
+    
+    
+    
     for t in range(1, len(T)):
         print("ttime step=",t)
         h = T[t] - T[t - 1]
@@ -473,7 +447,32 @@ if __name__ == '__main__':
     
     
     observed_y, observed_yp = simulate_observed_data(gamma_true, k, initial_conditions, (T[0], T[-1]), N, noise_level_s, noise_level_j)
+    
+    
+    for t in range(1, len(T)):
+        log_likelihood_values = [] 
+        h = T[t] - T[t - 1]
+        observed_y_t = observed_y[t]
+        y0 = [observed_y[t - 1], 0] 
+        for gamma in gammas:
+            y_simulated = euler_forward(gamma, k, y0, t, h)
+            ll_value = log_likelihood(y_simulated, observed_y[t], noise_level)
+            log_likelihood_values.append(ll_value)
 
+        # Convert to numpy array for easier plotting
+        log_likelihood_values = np.array(log_likelihood_values)
+
+        # Plotting the log-likelihood function
+        plt.figure(figsize=(10, 6))
+        plt.plot(gammas, log_likelihood_values, label=f'Time step {t}')
+        plt.xlabel('Gamma')
+        plt.ylabel('Log-Likelihood')
+        plt.title(f'Log-Likelihood vs. Gamma at Time step {t}')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+    
+    
     p_e, p_t = find_POST_t(gamma_init,observed_y, noise_level, N, k, initial_conditions, T,  tol, eta_init, c1, c2, M=2)
     
     print("p_e = ",p_e)
