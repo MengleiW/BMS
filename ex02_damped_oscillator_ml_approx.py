@@ -18,8 +18,8 @@ a system of first-order ODEs, we have:
 
 where y(t) = [x(t), x'(t)] and F(t, y) = [y2(t), 1/m*(f(t) - gma*y2(t) - k*y1(t))].
 
-We assume that gma is a uniform continuous random variable with ten possible values, 
-1, ..., 10. All other parameters are known. We wish to compare two different
+We assume that gma is a uniform continuous random variable with values in the 
+interval [0,1]. All other parameters are known. We wish to compare two different
 discretization schemes for the ODE, one using the Forward Euler method and the
 other using the trapzoidal rule, using the same time step h. 
 
@@ -38,6 +38,15 @@ subject to independent, Gaussian measurement error with standard deviation
 sigma. We compute the reference position by means a fine-grained solution of 
 the ODE. The measurements are taken at times t_meas.
 
+Method:
+
+1. Iterate over the time steps:
+    a. At each measurement time, and for each model, compute the one-step model evidence:
+        i. Estimate the velocity, using the right hand side of the ODE (assume for now that it is known)
+        ii. Compute the maximum likelihood estimate of the damping coefficient
+        iii. Compute the Fisher information (Hessian of the log-likelihood)
+        iv. Compute the model evidence at the current measurement time
+    b. Update the prior model evidence using the one-step model evidence
 
 """
 def forward_euler(t, y0, k, gma, m, f):
@@ -148,6 +157,14 @@ def euler_one_step_jacobian(y_prev, y_curr, t_interval, n_t, k, gma, m, f):
     return -dt/2*np.array(F_now) + dt/2*np.array(F_next)
 
 
+def euler_neg_log_likelihood(y_meas, sgm, t, y0, k, gma, m, f):
+    """
+    Compute the negative log-likelihood of the measurements given the model outputs
+    """
+    y_model = forward_euler(t, y0, k, gma, m, f)
+    return 0.5*np.sum((y_meas - y_model)**2/sgm**2)
+
+
 def damped_oscillator(t, y, k, gma, m, f):
     """
     The right-hand side of the damped oscillator ODE
@@ -199,7 +216,8 @@ ax.plot(t, y_true(t)[0], linewidth=1.5, color='black', label='True solution')
 n_meas = 21  # number of measurements
 t_meas = np.linspace(0, 10, n_meas)  # resolution of the measurements
 sgm = 0.1  # standard deviation of the measurement noise
-y_meas = y_true(t_meas)[0] + np.random.normal(0, sgm, n_meas)
+y_meas = y_true(t_meas)[0] + np.random.normal(0, sgm, n_meas)  # position measurements
+v_meas = y_true(t_meas)[1] + np.random.normal(0, sgm, n_meas)  # velocity measurements
 ax.scatter(t_meas, y_meas, color='red', s=25, label='Measurements')
 
 # Plot violin plot around measurements
@@ -224,11 +242,30 @@ t_disc = np.linspace(0, T, n_disc+1)  # time discretization
 
 gma_mle_fe = np.zeros(n_meas)  # Maximum likelihood estimates of the damping coefficient using Forward Euler
 gma_mle_trap = np.zeros(n_meas)  # Maximum likelihood estimates of the damping coefficient using the trapezoidal rule
-for t in t_disc:
+for i,t in enumerate(t_disc):
     #
     # Iterate in time
     #
 
+    # Compute the maximum likelihood estimates of the damping coefficient, given the current measurement
+    # Initial condition
+    xv_now = np.array(y_meas[i], v_meas[i])
+    xv_meas = np.array([y_meas[i+1], v_meas[i+1]])
+    t_int = np.array([t, t+dt])
+    f_cost = []
+    for gma in gmas:
+        # Evaluate the negative log likelihood of the measurements given the model outputs
+        print('xv_meas:',xv_meas)
+        print('xv_now:',xv_now)
+        print('t_')
+        f_cost.append(euler_neg_log_likelihood(xv_meas, sgm, t_int, xv_now, k, gma, m, f))
+    f_cost = np.array(f_cost)
+    plt.plot(gmas, f_cost)
+    plt.show()
+    # Use forward Euler to compute the solution
+    
+
+    
     # Compute the maximum likelihood estimates of the damping coefficient, given the current measurement
     
 
