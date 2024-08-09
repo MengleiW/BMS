@@ -1,0 +1,58 @@
+import numpy as np
+import scipy
+import matplotlib.pyplot as plt
+from scipy.optimize import minimize
+import torch
+from scipy.misc import derivative
+import numdifftools as nd
+
+
+
+def log_likelihood(theta, transition):
+    if transition:
+        log_likelihood_value = np.log(theta[0])
+    else:
+        log_likelihood_value = np.log(1 - theta[0])
+    return -log_likelihood_value
+
+def fisher_information(theta, transition):
+    if transition:
+        fisher_info_value = 1 / (theta**2)
+    else:
+        fisher_info_value = 1 / ((1 - theta)**2)
+    return fisher_info_value
+def optimize_theta(log_likelihood,transition, gamma):
+    initial_theta = 0.5
+    result = minimize(log_likelihood, x0=[initial_theta], args=(transition, gamma), bounds=[(0.01, 0.99)], method='L-BFGS-B')
+    return result.x[0]
+
+
+def find_MLE_and_posterior(data_sequence):
+    
+    
+    number_of_models = 10
+    gamma_values = np.linspace(0.01, 0.99, number_of_models)
+    theta_estimates = []
+    
+    posterior_distributions = []
+
+
+    for t in range(1, len(observed_data)):
+        transition = observed_data[t] != observed_data[t-1]
+        
+        MLE = optimize_theta(log_likelihood,  transition, gamma)
+        
+        fisher_info = fisher_information(MLE, transition)
+      
+        if fisher_info <= 0:
+            print(f"Invalid Fisher information at time step {t}")
+            break
+        
+        posterior = scipy.stats.norm(loc=MLE, scale=np.sqrt(1 / fisher_info))
+        posterior_distributions.append(posterior)
+    
+    evaluated_posteriors = []
+    for gamma in gamma_values:
+                
+    
+observed_data = 'AAAABAABBAAAAAABAAAA'
