@@ -261,10 +261,11 @@ def optimize_gamma(log_likelihood, grad_log_likelihood, gamma_init, observed_y, 
         fun=lambda gamma: -log_likelihood(method(gamma, k, y0, t, h), observed_y,observed_yp, noise_level),
         x0=gamma_init,
         jac=lambda gamma: -grad_log_likelihood(gamma, observed_y, observed_yp,noise_level, k, y0, t, h),
-        bounds=[(0, 1)],
+        bounds=[(0.001, 0.999)],
         method='L-BFGS-B'
     )
     #print(f"Optimization result: {result}")  # Debugging statement
+    
     return result.x
 
     
@@ -348,7 +349,8 @@ def find_POST_t(gamma_init, observed_y,observed_yp, noise_level, N, k, y0, T, to
     
     
     for t in range(1, len(T)):
-        print("ttime step=",t)
+        print("len(T)=",len(T))
+        print("time step=",t)
         h = T[t] - T[t - 1]
         observed_y_t = observed_y[t]
         observed_yp_t = observed_yp[t]
@@ -362,14 +364,14 @@ def find_POST_t(gamma_init, observed_y,observed_yp, noise_level, N, k, y0, T, to
         
        
 
-        fisher_e = fisher_information(log_likelihood, MLE_e, observed_y_t,observed_yp_t, noise_level, k, y0, T[t - 1], h, euler_forward)
-        fisher_t = fisher_information(log_likelihood, MLE_t, observed_y_t,observed_yp_t, noise_level, k, y0, T[t - 1], h, trapezoidal_method)
-        print("Fisher_e = ", fisher_e)
-        print("Fisher_t = ", fisher_t)
-        if np.any(fisher_e <= 0) or np.any(fisher_t <= 0):
+        one_over_neg_fisher_e = fisher_information(log_likelihood, MLE_e, observed_y_t,observed_yp_t, noise_level, k, y0, T[t - 1], h, euler_forward)
+        one_over_neg_fisher_t = fisher_information(log_likelihood, MLE_t, observed_y_t,observed_yp_t, noise_level, k, y0, T[t - 1], h, trapezoidal_method)
+        print("one_over_neg_Fisher_e = ", one_over_neg_fisher_e)
+        print("one_over_neg_Fisher_t = ", one_over_neg_fisher_t)
+        if np.any(one_over_neg_fisher_e <= 0) or np.any(one_over_neg_fisher_t <= 0):
             break
-        posterior_e = scipy.stats.norm(loc=MLE_e, scale=np.sqrt(1 / fisher_e))
-        posterior_t = scipy.stats.norm(loc=MLE_t, scale=np.sqrt(1 / fisher_t))
+        posterior_e = scipy.stats.norm(loc=MLE_e, scale=np.sqrt(1 / one_over_neg_fisher_e))
+        posterior_t = scipy.stats.norm(loc=MLE_t, scale=np.sqrt(1 / one_over_neg_fisher_t))
         print("posterior_e=", posterior_e)
         print("posterior_t = ", posterior_t)
         
