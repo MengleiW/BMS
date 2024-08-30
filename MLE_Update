@@ -596,24 +596,28 @@ if __name__ == '__main__':
     
     
 
-    plt.figure(figsize=(14, 8))
-
-
-    plt.plot(range(len(p_e)), p_e, label='p_e', marker='o', linestyle='-', color='blue', alpha=0.5)
-    plt.plot(range(len(p_t)), p_t, label='p_t', marker='o', linestyle='-', color='red', alpha=0.5)
-
-    plt.plot(range(len(Z_E)), Z_E, label='Z_E', marker='x', linestyle='--', color='blue', alpha=0.8)
-    plt.plot(range(len(Z_T)), Z_T, label='Z_T', marker='x', linestyle='--', color='red', alpha=0.8)
+    agreement = []
 
     for i in range(len(p_e)):
-        if (p_e[i] > p_t[i]) and (Z_E[i] > Z_T[i]):
-            plt.text(i, p_e[i], 'Agree on E', fontsize=9, ha='center', color='blue')
-        elif (p_t[i] > p_e[i]) and (Z_T[i] > Z_E[i]):
-            plt.text(i, p_t[i], 'Agree on T', fontsize=9, ha='center', color='red')
-
+        
+        if (p_e[i] > p_t[i] and Z_E[i] > Z_T[i]) or (p_t[i] > p_e[i] and Z_T[i] > Z_E[i]):
+            agreement.append(1)
+        else:
+            agreement.append(0) 
+                
+                
+    plt.figure(figsize=(10, 6))
+                
+                
+    plt.figure(figsize=(10, 6))
+    for i, status in enumerate(agreement):
+        color = 'green' if status == 1 else 'red'
+        plt.scatter(i, 1, color=color)
+                            
     plt.xlabel('Time Step')
-    plt.ylabel('Value')
-    plt.title('Agreement of p_e/p_t with Z_E/Z_T Over Time Steps')
+    plt.ylabel('Agreement')
+    plt.title('Agreement between p_e, Z_E and p_t, Z_T')
     plt.legend()
+    plt.yticks([]) 
     plt.grid(True)
     plt.show()
