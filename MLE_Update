@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 import torch
 from scipy.misc import derivative
-import numdifftools as nd
+# import numdifftools as nd
 
 from scipy.integrate import quadrature
 
