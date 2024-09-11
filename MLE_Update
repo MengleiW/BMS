@@ -441,17 +441,16 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, y0
         
         Z_E_bayesian_euler = compute_Z_quadrature(observed_y[:t], observed_yp[:t],noise_level, k, y0, T[:t ], h, euler_forward_z)
         Z_T_bayesian_trapezoidal = compute_Z_quadrature(observed_y[:t],observed_yp[:t], noise_level, k, y0, T[:t ], h,  trapezoidal_method_z)
-        model_prior_E = 1
-        model_prior_T = 1
+        
         
         Z_E.append(Z_E_bayesian_euler)
         Z_T.append(Z_T_bayesian_trapezoidal)
-        P_E.append(model_prior_E * Z_E[-1] / (model_prior_E * Z_E[-1] + model_prior_T * Z_T[-1]))
-        P_T.append(model_prior_T * Z_T[-1] / (model_prior_E * Z_E[-1] + model_prior_T * Z_T[-1]))
+        P_E.append([np.exp(log_likelihood(euler_forward(gamma, k, y0, T[t - 1], h), observed_y_t, observed_yp_t, noise_level)) / Z_E_bayesian_euler for gamma in gammas])
+        P_T.append([np.exp(log_likelihood(trapezoidal_method(gamma, k, y0, T[t - 1], h), observed_y_t, observed_yp_t, noise_level)) / Z_E_bayesian_euler for gamma in gammas])
         #print("Z_T=",Z_T)   
         
         threshold = 10
-        if Z_e[-1] > threshold or Z_t[-1] > threshold or t == 40:
+        if Z_e[-1] > threshold or Z_t[-1] > threshold or t == 10 or t==50 or t ==80:
             print(f"Large Z-value at time step {t}: Z_e = {Z_e[t]}, Z_t = {Z_t[t]}  ")
             #print(f"Posterior_e = {posterior_e.pdf(MLE_e[0])}, Posterior_t = {posterior_t.pdf(MLE_t[0])} ")
             #print(f" Likelihood_e = {likelihood_e} , Likelihood_t = {likelihood_t}")
@@ -460,10 +459,10 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, y0
             
             posterior_e_bayesian_vals = []
             posterior_e_vals = posterior_e.pdf(gammas)
-            #for gamma in gammas:
+            print(f"Posterior_e = {posterior_e_vals}")
                 
                 
-            posterior_e_bayesian_vals = [np.exp(log_likelihood(euler_forward(gamma, k, y0, T[t - 1], h), observed_y_t, observed_yp_t, noise_level)) / Z_E[-1] for gamma in gammas]
+            posterior_e_bayesian_vals = [np.exp(log_likelihood(euler_forward(gamma, k, y0, T[t - 1], h), observed_y_t, observed_yp_t, noise_level)) / Z_E_bayesian_euler for gamma in gammas]
             print(f"posterior_e_bayesian_vals = {posterior_e_bayesian_vals}  z_E ={Z_E}" )
             posterior_e_vals = np.array(posterior_e_vals)
             posterior_e_bayesian_vals = np.array(posterior_e_bayesian_vals)
