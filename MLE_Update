@@ -178,7 +178,7 @@ def log_likelihood(simulated, observed_y,observed_yp,  noise_level):
     #print("Log-likelihood", ll_y + ll_yp)  
     return ll_y + ll_yp
 
-def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, noise_level_s, noise_level_j):
+def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, noise_level):
     """
     Computes the combined log-likelihood of the observed position and velocity data for a given simulated dataset.
     And since we are intrest both
@@ -195,22 +195,16 @@ def calculate_combined_log_likelihood(simulated, observed_y, observed_yp, noise_
     """
     ll_y = np.zeros(simulated.shape[0])
     ll_yp = np.zeros(simulated.shape[0])
-    half = N // 2 
-    #for i in range(simulated.shape[0]):
-    
-    
+   
     for i in range(len(simulated)):
-        if i < half:
-            noise_level = noise_level_s
-        else:
-            noise_level = noise_level_j
-        #print("residuals=", simulated)
-        residuals_y = observed_y[i] - simulated[:, 0]
-        residuals_yp = observed_yp[i] - simulated[:,1]
+        
+        #print("residuals=", simulated[:, 0])
+        residuals_y = observed_y[i] - simulated[i, 0]
+        residuals_yp = observed_yp[i] - simulated[i,1]
         ll_y[i] =  -0.5 * m * np.log(2 * np.pi) - 0.5 * m * np.log(noise_level**2) \
-                - 0.5 / (noise_level**2) * np.sum(residuals_y**2)
+                - 0.5 / (noise_level**2) * (residuals_y**2)
         ll_yp[i] = -0.5 * m * np.log(2 * np.pi) - 0.5 * m * np.log(noise_level**2) \
-                - 0.5 / (noise_level**2) * np.sum(residuals_yp**2)
+                - 0.5 / (noise_level**2) * (residuals_yp**2)
         
         #ll_yp = np.sum(scipy.stats.norm.logpdf(residuals_yp, scale=sigma_yp))
     #ll_y = ll_y1 np.concatenate([ll_y1, ll_y2])
@@ -352,7 +346,7 @@ def fisher_information(log_likelihood, gamma, observed_y,observed_yp, noise_leve
 
     
 
-def find_POST_t(gamma_init, observed_y,observed_yp, noise_level, N, k, y0, T, tol, eta_init, c1, c2, M=2):
+def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, y0, T, tol, eta_init, c1, c2, M=2):
     """
    Calculates the normalizing constant Z_t(M) after finding the MLE gamma.
 
@@ -381,8 +375,8 @@ def find_POST_t(gamma_init, observed_y,observed_yp, noise_level, N, k, y0, T, to
     P_e = [0.5]
     P_t = [0.5]
     
-    Z_E =[0.5]
-    Z_T = [0.5]
+    Z_E =[1]
+    Z_T = [1]
     P_E = [0.5]
     P_T = [0.5]
     number_of_gammas = 10
@@ -395,7 +389,7 @@ def find_POST_t(gamma_init, observed_y,observed_yp, noise_level, N, k, y0, T, to
         #print("len(T)=",len(T))
         #print("time step=",t)
         h = T[t] - T[t - 1]
-        tao = T[:t]
+        
         observed_y_t = observed_y[t]
         observed_yp_t = observed_yp[t]
         
@@ -440,14 +434,6 @@ def find_POST_t(gamma_init, observed_y,observed_yp, noise_level, N, k, y0, T, to
         if np.any(np.isnan(Z_e[-1])) or np.any(np.isnan(Z_t[-1])):
             #print("NaN in Z_t or Z_e")
             break
-        threshold = 2
-        if Z_e[-1] > threshold or Z_t[-1] > threshold:
-            print(f"Large Z-value at time step {t}: Z_e = {Z_e[t]}, Z_t = {Z_t[t]}  ")
-            print(f"Posterior_e = {posterior_e.pdf(MLE_e[0])}, Posterior_t = {posterior_t.pdf(MLE_t[0])} ")
-            print(f" Likelihood_e = {likelihood_e} , Likelihood_t = {likelihood_t}")
-            print(f" one_over_neg_fisher_e = {one_over_neg_fisher_e} , one_over_neg_fisher_t = {one_over_neg_fisher_t}")
-            
-            print(f"MLE_E = {MLE_e}   MLE_T={MLE_t}" )
         P_e.append(model_prior_e * Z_e[-1] / (model_prior_e * Z_e[-1] + model_prior_t * Z_t[-1]))
         P_t.append(model_prior_t * Z_t[-1] / (model_prior_e * Z_e[-1] + model_prior_t * Z_t[-1]))
         #print("p_e = ",P_e)
@@ -455,13 +441,42 @@ def find_POST_t(gamma_init, observed_y,observed_yp, noise_level, N, k, y0, T, to
         
         Z_E_bayesian_euler = compute_Z_quadrature(observed_y[:t], observed_yp[:t],noise_level, k, y0, T[:t ], h, euler_forward_z)
         Z_T_bayesian_trapezoidal = compute_Z_quadrature(observed_y[:t],observed_yp[:t], noise_level, k, y0, T[:t ], h,  trapezoidal_method_z)
+        model_prior_E = 1
+        model_prior_T = 1
+        
         Z_E.append(Z_E_bayesian_euler)
         Z_T.append(Z_T_bayesian_trapezoidal)
-        P_E.append(model_prior_e * Z_e[-1] / (model_prior_e * Z_e[-1] + model_prior_t * Z_t[-1]))
-        P_T.append(model_prior_t * Z_t[-1] / (model_prior_e * Z_e[-1] + model_prior_t * Z_t[-1]))
+        P_E.append(model_prior_E * Z_E[-1] / (model_prior_E * Z_E[-1] + model_prior_T * Z_T[-1]))
+        P_T.append(model_prior_T * Z_T[-1] / (model_prior_E * Z_E[-1] + model_prior_T * Z_T[-1]))
+        #print("Z_T=",Z_T)   
         
+        threshold = 10
+        if Z_e[-1] > threshold or Z_t[-1] > threshold or t == 40:
+            print(f"Large Z-value at time step {t}: Z_e = {Z_e[t]}, Z_t = {Z_t[t]}  ")
+            #print(f"Posterior_e = {posterior_e.pdf(MLE_e[0])}, Posterior_t = {posterior_t.pdf(MLE_t[0])} ")
+            #print(f" Likelihood_e = {likelihood_e} , Likelihood_t = {likelihood_t}")
+            #print(f" one_over_neg_fisher_e = {one_over_neg_fisher_e} , one_over_neg_fisher_t = {one_over_neg_fisher_t}")
+            #print(f"MLE_E = {MLE_e}   MLE_T={MLE_t}" )
+            
+            posterior_e_bayesian_vals = []
+            posterior_e_vals = posterior_e.pdf(gammas)
+            #for gamma in gammas:
+                
+                
+            posterior_e_bayesian_vals = [np.exp(log_likelihood(euler_forward(gamma, k, y0, T[t - 1], h), observed_y_t, observed_yp_t, noise_level)) / Z_E[-1] for gamma in gammas]
+            print(f"posterior_e_bayesian_vals = {posterior_e_bayesian_vals}  z_E ={Z_E}" )
+            posterior_e_vals = np.array(posterior_e_vals)
+            posterior_e_bayesian_vals = np.array(posterior_e_bayesian_vals)
+            plt.figure(figsize=(8, 6))
+            plt.plot(gammas, posterior_e_vals, label=f'Euler Posterior at t={t}', color='blue')
+            plt.plot(gammas, posterior_e_bayesian_vals, label=f'Bayesian Euler Posterior at t={t}', color='green',marker='o', linestyle='--')
+            plt.title(f'Posterior Distributions at Time Step {t}')
+            plt.xlabel('Gamma')
+            plt.ylabel('Posterior (Likelihood Normalized)')
+            plt.legend()
+            plt.grid(True)
+            plt.show()
         
-    #print("Z_E=",Z_E)
     return P_e, P_t , P_E, P_T ,Z_E,Z_T,Z_e,Z_t
 
   
@@ -482,12 +497,11 @@ def compute_Z_quadrature(observed_y_t, observed_yp_t,noise_level, k, y0, t, tao,
     Outputs:
         Z: Float, the computed normalization constant using quadrature integration.
     """
-    noise_level_s = 0.1
-    noise_level_j = 0.3
+
+    integrand = lambda gamma: np.exp(calculate_combined_log_likelihood(method(gamma, k, y0, t), observed_y, observed_yp, noise_level))
+    #print("integrand", integrand)
     
-    integrand = lambda gamma: np.exp(calculate_combined_log_likelihood(method(gamma, k, y0, t), observed_y, observed_yp, noise_level_s, noise_level_j))
-    
-    Z, _ = quadrature(integrand, 0, 1, tol=1e-8, maxiter=100)
+    Z, _ = quadrature(integrand, 0, 1, tol=1e-8, maxiter=200)
     return Z
 
 
@@ -508,7 +522,7 @@ if __name__ == '__main__':
     Dimention_of_parameter_space = 1
     gammas = np.linspace(0, 1, number_of_gammas)
     
-    N = 200
+    N = 100
     
     T = np.linspace(0, 10, N)
     check_points = [1,5,8]
@@ -521,7 +535,7 @@ if __name__ == '__main__':
     #sigma_yp = 0.1
     noise_level_s = 0.1
     noise_level_j = 0.2
-    noise_level = 0.3
+    noise_level = 0.2
     c1=1e-4
     c2=0.9
     eta_init=1
@@ -533,7 +547,6 @@ if __name__ == '__main__':
     
     
     observed_y, observed_yp = simulate_observed_data(gamma_true, k, initial_conditions, (T[0], T[-1]), N, noise_level_s, noise_level_j)
-    
     
     #for t in range(1, len(T)):
         #log_likelihood_values = [] 
@@ -560,10 +573,13 @@ if __name__ == '__main__':
       #  plt.show()
     
     
-    p_e, p_t , P_E, P_T ,Z_E,Z_T,Z_e,Z_t = find_POST_t(gamma_init,observed_y, observed_yp,noise_level, N, k, initial_conditions, T,  tol, eta_init, c1, c2, M=2)
-    
-    print("p_e = ",p_e)
-    print("p_t = ",p_t)
+    p_e, p_t , P_E, P_T ,Z_E,Z_T,Z_e,Z_t = find_POST_t(gammas,gamma_init,observed_y, observed_yp,noise_level, N, k, initial_conditions, T,  tol, eta_init, c1, c2, M=2)
+    print("Z_e=",Z_e)  
+    print("Z_t=",Z_t)  
+    print("Z_E=",Z_E)  
+    print("Z_T=",Z_T)  
+    #print("p_e = ",p_e)
+    #print("p_t = ",p_t)
     plt.figure(figsize=(10, 6))
     plt.plot(range(len(p_e)), p_e, label='p_e', marker='o', linestyle='-', color='blue')
     plt.plot(range(len(p_t)), p_t, label='p_t', marker='o', linestyle='-', color='red')
