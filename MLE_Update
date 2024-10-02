@@ -62,7 +62,7 @@ def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, n
     #print("y2=",y)
     return y, yp
 
-def euler_forward(gamma, k, y0, t, h):
+def euler_forwarda(gamma, k, y0, t, h):
     """
     Numerically approximates the solution of the damped oscillator using the Euler forward method for a single time point.
 
@@ -81,7 +81,7 @@ def euler_forward(gamma, k, y0, t, h):
     #print(f"Euler Method: gamma={h}, y0={damped_oscillator(t, y0, gamma, k)}, y_t_plus_one={y_t_plus_one}") 
     return y_t_plus_one
 
-def trapezoidal_method(gamma, k, y0, t, h ):
+def trapezoidal_methoda(gamma, k, y0, t, h ):
     """
     Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
 
@@ -101,7 +101,54 @@ def trapezoidal_method(gamma, k, y0, t, h ):
     y_t_puls_one = y0 + h / 2 * (f_n + f_n_plus_1)
     return y_t_puls_one
 
+def euler_forward(gamma, k, y0, T,h):
+    """
+   Numerically approximates the solution of the damped oscillator using the Euler forward method.
 
+   Inputs:
+     gamma: Float, damping coefficient.
+     k: Float, stiffness coefficient.
+     y0: 1D Array, initial state of the system (position and velocity).
+     T: Array, time points.
+
+   Outputs:
+     y: 2D Array, where each row corresponds to the system states (position and velocity) at each time point.
+   """
+    y = np.zeros((len(T), 2))
+    y[0, :] = y0
+    
+    if len(T)>1:
+        for i, t in enumerate(T[:-1]):
+            h = T[i+1] - T[i]
+            y[i + 1, :] = y[i, :] + h * np.array(damped_oscillator(t, y[i, :], gamma, k))
+            
+    return y[-1, :]
+
+def trapezoidal_method(gamma, k, y0, T,h):
+    """
+    Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
+
+    Inputs:
+      gammas: Array, range of damping coefficients.
+      k: Float, stiffness coefficient.
+      initial_conditions: 2D Array, initial states of the system for each gamma (position and velocity).
+      T: Float, Time points.
+      
+
+    Outputs:
+      y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
+    """
+    y = np.zeros((len(T), 2))
+    y[0, :] = y0
+    if len(T)>1:
+        for i, t in enumerate(T[:-1]):
+            h = T[i+1] - T[i]
+            f_n = np.array(damped_oscillator(t, y[i, :], gamma, k))
+            y_pred = y[i, :] + h * f_n
+            f_n_plus_1 = np.array(damped_oscillator(t + h, y_pred, gamma, k))
+            y[i + 1, :] = y[i, :] + h / 2 * (f_n + f_n_plus_1)
+
+    return y[-1, :]
 
 def log_likelihood(simulated, observed_y,observed_yp,  noise_level):
     """
@@ -302,7 +349,7 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, in
     P_T = [0.5]
     number_of_gammas = 10
     y0 = initial_conditions
-    
+    num_internal_steps = 10
     
     
     
@@ -315,14 +362,19 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, in
         observed_yp_t = observed_yp[t]
         
         y0 = [observed_y[t - 1], observed_yp[t - 1]] 
+        
+        T_internal = np.linspace(T[t - 1], T[t], num_internal_steps + 1)
+        #print("T_internal = ",T_internal)
         #print("y00=",y0)        
-        MLE_e = optimize_gamma(log_likelihood, gradient_log_likelihood_euler, P_e[-1], observed_y_t,observed_yp_t, noise_level, k, y0, T[t - 1], h, euler_forward)
-        MLE_t = optimize_gamma(log_likelihood, gradient_log_likelihood_trapezoidal, P_t[-1], observed_y_t,observed_yp_t, noise_level, k, y0, T[t - 1], h, trapezoidal_method)
+        MLE_e = optimize_gamma(log_likelihood, gradient_log_likelihood_euler, P_e[-1], observed_y_t,observed_yp_t, noise_level, k, y0, T_internal, h, euler_forward)
+        MLE_t = optimize_gamma(log_likelihood, gradient_log_likelihood_trapezoidal, P_t[-1], observed_y_t,observed_yp_t, noise_level, k, y0, T_internal, h, trapezoidal_method)
         #print("MLE_e = ", MLE_e)
         #print("MLE_t = ", MLE_t)
         
-        neg_fisher_e = fisher_information(log_likelihood, MLE_e, observed_y_t,observed_yp_t, noise_level, k, y0, T[t - 1], h, euler_forward)
-        neg_fisher_t = fisher_information(log_likelihood, MLE_t, observed_y_t,observed_yp_t, noise_level, k, y0, T[t - 1], h, trapezoidal_method)
+       
+
+        neg_fisher_e = fisher_information(log_likelihood, MLE_e, observed_y_t,observed_yp_t, noise_level, k, y0, T_internal, h, euler_forward)
+        neg_fisher_t = fisher_information(log_likelihood, MLE_t, observed_y_t,observed_yp_t, noise_level, k, y0, T_internal, h, trapezoidal_method)
         #print("one_over_neg_Fisher_e = ", one_over_neg_fisher_e)
         #print("one_over_neg_Fisher_t = ", one_over_neg_fisher_t)
         if np.any(neg_fisher_e <= 0) or np.any(neg_fisher_t <= 0):
@@ -337,8 +389,8 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, in
         
         
 
-        likelihood_e = np.exp(log_likelihood(euler_forward(MLE_e, k, y0, T[t - 1], h), observed_y_t,observed_yp_t, noise_level))
-        likelihood_t = np.exp(log_likelihood(trapezoidal_method(MLE_t, k, y0, T[t - 1], h), observed_y_t, observed_yp_t,noise_level))
+        likelihood_e = np.exp(log_likelihood(euler_forward(MLE_e, k, y0, T_internal, h), observed_y_t,observed_yp_t, noise_level))
+        likelihood_t = np.exp(log_likelihood(trapezoidal_method(MLE_t, k, y0, T_internal, h), observed_y_t, observed_yp_t,noise_level))
 
         #print("likelihood_e = ", likelihood_e)
         #print("likelihood_t = ", likelihood_t)
@@ -358,14 +410,14 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, in
         #print("p_e = ",P_e)
         
         
-        Z_E_bayesian_euler = compute_Z_quadrature(observed_y[t], observed_yp[t], noise_level, k, y0, T[t - 1], h, euler_forward)
-        Z_E_bayesian_euler_check = compute_Z_quadrature_E(observed_y[t], observed_yp[t], noise_level, k, y0, T[t - 1], h)
+        Z_E_bayesian_euler = compute_Z_quadrature(observed_y[t], observed_yp[t], noise_level, k, y0, T_internal, h, euler_forward)
+        Z_E_bayesian_euler_check = compute_Z_quadrature_E(observed_y[t], observed_yp[t], noise_level, k, y0, T_internal, h)
         #print(f"Large Z-value at time step {t}: Z_E_bayesian_euler = {Z_E_bayesian_euler},  Z_E_bayesian_euler_check  = { Z_E_bayesian_euler_check }  ")
         #if np.any(Z_E_bayesian_euler != Z_E_bayesian_euler_check) :
             #print("something wrong with quadratrue")
             #break
         
-        Z_T_bayesian_trapezoidal = compute_Z_quadrature(observed_y[t], observed_yp[t], noise_level, k, y0, T[t - 1], h, trapezoidal_method)
+        Z_T_bayesian_trapezoidal = compute_Z_quadrature(observed_y[t], observed_yp[t], noise_level, k, y0, T_internal, h, trapezoidal_method)
 
         Z_E.append(Z_E_bayesian_euler)
         Z_T.append(Z_T_bayesian_trapezoidal)
@@ -373,7 +425,7 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, in
         
         P_E.append([(np.exp(-50*((observed_y_t-y0[0]-h*y0[1])**2+(observed_yp_t-y0[1]+k*h*y0[0]-gamma*h*y0[1])**2)))  / Z_E_bayesian_euler_check for gamma in gammas])
         #P_E.append([np.exp(log_likelihood(euler_forward(gamma, k, y0, T[t - 1], h), observed_y_t, observed_yp_t, noise_level))  / Z_E_bayesian_euler for gamma in gammas])
-        P_T.append([np.exp(log_likelihood(trapezoidal_method(gamma, k, y0, T[t - 1], h), observed_y_t, observed_yp_t, noise_level))  / Z_T_bayesian_trapezoidal for gamma in gammas])
+        P_T.append([np.exp(log_likelihood(trapezoidal_method(gamma, k, y0, T_internal, h), observed_y_t, observed_yp_t, noise_level))  / Z_T_bayesian_trapezoidal for gamma in gammas])
 
         #print("Z_T=",Z_T)   
         
@@ -389,8 +441,8 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, in
             #print(f" Likelihood_e = {likelihood_e} , Likelihood_t = {likelihood_t}")
             #print(f" one_over_neg_fisher_e = {neg_fisher_e} , one_over_neg_fisher_t = {neg_fisher_t}")
             #print(f"MLE_E = {MLE_e}   MLE_T={MLE_t}" )
-            y_ee = euler_forward(MLE_e, k, y0, t, h)
-            y_tt = trapezoidal_method(MLE_t, k, y0, t, h)
+            y_ee = euler_forward(MLE_e, k, y0, T_internal, h)
+            y_tt = trapezoidal_method(MLE_t, k, y0, T_internal, h)
             residuals_y_e = observed_y[t] - y_ee[0]  
             residuals_yp_e = observed_yp[t] - y_ee[1] 
             #print(f" residuals_y_e = {residuals_y_e} , residuals_yp_e = {residuals_yp_e}")
