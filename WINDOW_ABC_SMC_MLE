@@ -623,7 +623,7 @@ def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
         print(f"ABC-SMC gen {g}:  ε = {eps:.3f}  –  "
               f"ESS = {1/np.sum(w**2):.1f}")
 
-    return thetas, weights, Z_t
+    return Z_t, thetas, weights
 
 
 
@@ -675,7 +675,8 @@ if __name__ == '__main__':
     W = W_boot                       # current window size
     t_idx= 2                                # first index with a full W
     theta_prior = np.linspace(0, 1, 101)
-    
+    Z_e_hist, Z_t_hist = [], []
+    P_e_hist, P_t_hist = [0.5], [0.5]
     
     
     while t_idx < len(T):
@@ -716,21 +717,27 @@ if __name__ == '__main__':
             return y
         
         
-        Z_e, Theta_E, wE = abc_smc(euler_series, theta_prior,y_slice, yp_slice, sigma_sl, t_slice, N_particles=5, 
+        Z_e_all, Theta_E, wE  = abc_smc(euler_series, theta_prior,y_slice, yp_slice, sigma_sl, t_slice, N_particles=5, 
                               N_generations=5)
-        Z_t, Theta_T, wT = abc_smc(trapezoidal_series, theta_prior, y_slice, yp_slice, sigma_sl, t_slice, N_particles=5, 
+        Z_t_all, Theta_T, wT = abc_smc(trapezoidal_series, theta_prior, y_slice, yp_slice, sigma_sl, t_slice, N_particles=5, 
                               N_generations=5)   
     
-        
-    
-    
+        Z_e_hat = float(Z_e_all[-1])
+        Z_t_hat = float(Z_t_all[-1])
+        Z_e_hist.append(Z_e_hat)
+        Z_t_hist.append(Z_t_hat)    
         #abc only:keep the last posterior/evidence of this window
-        P_e_next = P_e[-1] * Z_e / (P_e[-1] * Z_e + P_t[-1] * Z_t)
-        P_t_next = 1.0 - P_e_next
-        P_e.append(P_e_next);  P_t.append(P_t_next)
-        Z_e.append(Z_e);   Z_t.append(Z_t)
-                
+        if P_e_hist:                             # history exists
+            Pe_prev = P_e_hist[-1]
+            Pt_prev = P_t_hist[-1]
+        else:                                    # first iteration
+            Pe_prev, Pt_prev = [0.5], [0.5]
         
+        Pe_next = Pe_prev * Z_e_hat / (Pe_prev * Z_e_hat + Pt_prev * Z_t_hat)
+        Pt_next = 1.0 - Pe_next
+        P_e_hist.append(Pe_next)
+        P_t_hist.append(Pt_next)
+                
         
         
         # keep the last posterior/evidence of this window
