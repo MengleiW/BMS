@@ -664,7 +664,7 @@ if __name__ == '__main__':
     observed_y, observed_yp,sol = simulate_observed_data(gamma_true, k, initial_conditions, (T[0], T[-1]), N, noise_level_s, noise_level_j)
         
     W_min = 4                            # min number of points   (≈ 2Δt)
-    W_max = 50          # max number of points   (≈ 2.5 s here)
+    W_max = 50          # max number of points 
     deltas= 4       # step by which W grows/shrinks
     W_boot= 4           # first two bootstrap windows
     err_hist = []               # store ε_r values to compare
@@ -793,72 +793,130 @@ if __name__ == '__main__':
     
     
     
-    data_length = len(p_e)
-    x_values = np.arange(1, 1 + data_length * 0.5, 0.5)
-    plt.figure(figsize=(10, 6))
-
+    # Plot posterior evolution 
+    Lp = min(len(P_e_hist), len(P_t_hist))
+    if Lp > 0:
+        x_p = np.arange(1, Lp + 1)
+        Pe = P_e_hist[:Lp]
+        Pt = P_t_hist[:Lp]
     
-    plt.plot(x_values, p_e, label='p_e', marker='o', linestyle='-', color='blue')
-    plt.plot(x_values, p_t, label='p_t', marker='o', linestyle='-', color='red')
-    plt.xlabel('Time')
-    plt.ylabel('Probability')
-    plt.title('Comparison of p_e and p_t Over Time')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+        plt.figure(figsize=(8, 5))
+        plt.plot(x_p, Pe, marker='o', linestyle='-', color='blue', label=r'$P_e$ (Euler)')
+        plt.plot(x_p, Pt, marker='s', linestyle='--', color='red',  label=r'$P_t$ (Trap)')
+        plt.xlabel('Window index')
+        plt.ylabel('Model posterior')
+        plt.title('Evolution of model‐posterior $P_e$ vs.\ $P_t$')
+        plt.ylim(-0.05, 1.05)
+        plt.xticks(x_p)
+        plt.legend()
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("Warning: no P-history to plot.")
     
+    # Plot evidence evolution
+    Lz = min(len(Z_e_hist), len(Z_t_hist))
+    if Lz > 0:
+        x_z = np.arange(1, Lz + 1)
+        Ze = Z_e_hist[:Lz]
+        Zt = Z_t_hist[:Lz]
     
-    
-
-
-    data_length = len(Z_e)
-    x_values = np.arange(1, 1 + data_length * 0.5, 0.5)
-    plt.figure(figsize=(14, 8))
-
-    
-    plt.plot(x_values, Z_e, label='Z_e', marker='o', linestyle='-', color='blue', alpha=0.5)
-    plt.plot(x_values, Z_E, label='Z_E', marker='x', linestyle='--', color='blue', alpha=0.8)
-    
-    plt.plot(x_values, Z_t, label='Z_t', marker='o', linestyle='-', color='red', alpha=0.5)
-    plt.plot(x_values, Z_T, label='Z_T', marker='x', linestyle='--', color='red', alpha=0.8)
-    
-   
-    for i in range(len(Z_e)):
-        if Z_e[i] > Z_E[i]:
-            plt.text(x_values[i], Z_e[i], 'Z_e', fontsize=9, ha='center', color='blue')
-        else:
-            plt.text(x_values[i], Z_E[i], 'Z_E', fontsize=9, ha='center', color='blue')
-                
-    for i in range(len(Z_t)):
-        if Z_t[i] > Z_T[i]:
-            plt.text(x_values[i], Z_t[i], 'Z_t', fontsize=9, ha='center', color='red')
-        else:
-            plt.text(x_values[i], Z_T[i], 'Z_T', fontsize=9, ha='center', color='red')
-                
-    plt.xlabel('Time')
-    plt.ylabel('Value')
-    plt.title('Comparison of Z_e, Z_E, Z_t, and Z_T Over Time')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-     
+        plt.figure(figsize=(8, 5))
+        plt.plot(x_z, Ze, marker='o', linestyle='-',  color='blue', label=r'$Z_e$ (Euler)')
+        plt.plot(x_z, Zt, marker='s', linestyle='--', color='red',  label=r'$Z_t$ (Trap)')
+        plt.xlabel('Window index')
+        plt.ylabel('Evidence $Z$')
+        plt.title('Evolution of evidence $Z_e$ vs.\ $Z_t$')
+        plt.yscale('log')
+        plt.xticks(x_z)
+        plt.legend()
+        plt.grid(alpha=0.3, which='both')
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("Warning: no Z-history to plot.")
+        
     
     
-
-    agreement_status = []
-    for i in range(len(p_e)):
-        if (p_e[i] > p_t[i] and P_E[i] > P_T[i]) or (p_t[i] > p_e[i] and P_T[i] > P_E[i]):
-            agreement_status.append(1)  
-        else:
-            agreement_status.append(0)
-
-    plt.figure(figsize=(10, 6))
-    for i, status in enumerate(agreement_status):
-        color = 'green' if status == 1 else 'red'
-        plt.scatter(i, 1, color=color)  # Place the dot on y=1 for simplicity
-
-    plt.xlabel('Time Step')
-    plt.ylabel('Agreement')
-    plt.title('Agreement between p_e, p_t and P_E,P_T at Each Time Step')
-    plt.grid(True)
-    plt.show()
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+# =============================================================================
+#     data_length = len(p_e)
+#     x_values = np.arange(1, 1 + data_length * 0.5, 0.5)
+#     plt.figure(figsize=(10, 6))
+# 
+#     
+#     plt.plot(x_values, p_e, label='p_e', marker='o', linestyle='-', color='blue')
+#     plt.plot(x_values, p_t, label='p_t', marker='o', linestyle='-', color='red')
+#     plt.xlabel('Time')
+#     plt.ylabel('Probability')
+#     plt.title('Comparison of p_e and p_t Over Time')
+#     plt.legend()
+#     plt.grid(True)
+#     plt.show()
+#     
+#     
+#     
+# 
+# 
+#     data_length = len(Z_e)
+#     x_values = np.arange(1, 1 + data_length * 0.5, 0.5)
+#     plt.figure(figsize=(14, 8))
+# 
+#     
+#     plt.plot(x_values, Z_e, label='Z_e', marker='o', linestyle='-', color='blue', alpha=0.5)
+#     plt.plot(x_values, Z_E, label='Z_E', marker='x', linestyle='--', color='blue', alpha=0.8)
+#     
+#     plt.plot(x_values, Z_t, label='Z_t', marker='o', linestyle='-', color='red', alpha=0.5)
+#     plt.plot(x_values, Z_T, label='Z_T', marker='x', linestyle='--', color='red', alpha=0.8)
+#     
+#    
+#     for i in range(len(Z_e)):
+#         if Z_e[i] > Z_E[i]:
+#             plt.text(x_values[i], Z_e[i], 'Z_e', fontsize=9, ha='center', color='blue')
+#         else:
+#             plt.text(x_values[i], Z_E[i], 'Z_E', fontsize=9, ha='center', color='blue')
+#                 
+#     for i in range(len(Z_t)):
+#         if Z_t[i] > Z_T[i]:
+#             plt.text(x_values[i], Z_t[i], 'Z_t', fontsize=9, ha='center', color='red')
+#         else:
+#             plt.text(x_values[i], Z_T[i], 'Z_T', fontsize=9, ha='center', color='red')
+#                 
+#     plt.xlabel('Time')
+#     plt.ylabel('Value')
+#     plt.title('Comparison of Z_e, Z_E, Z_t, and Z_T Over Time')
+#     plt.legend()
+#     plt.grid(True)
+#     plt.show()
+#      
+#     
+#     
+# 
+#     agreement_status = []
+#     for i in range(len(p_e)):
+#         if (p_e[i] > p_t[i] and P_E[i] > P_T[i]) or (p_t[i] > p_e[i] and P_T[i] > P_E[i]):
+#             agreement_status.append(1)  
+#         else:
+#             agreement_status.append(0)
+# 
+#     plt.figure(figsize=(10, 6))
+#     for i, status in enumerate(agreement_status):
+#         color = 'green' if status == 1 else 'red'
+#         plt.scatter(i, 1, color=color)  # Place the dot on y=1 for simplicity
+# 
+#     plt.xlabel('Time Step')
+#     plt.ylabel('Agreement')
+#     plt.title('Agreement between p_e, p_t and P_E,P_T at Each Time Step')
+#     plt.grid(True)
+#     plt.show()
+# =============================================================================
