@@ -535,7 +535,8 @@ def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
     #default geometric threshold schedule
     if eps_schedule is None:
         eps_max = np.max(np.abs(y_obs)) * 2
-        eps_schedule = eps_max * (0.4 ** np.arange(N_generations))
+        shrink  = 0.8 
+        eps_schedule = eps_max * (shrink ** np.arange(N_generations))
 
     # convenience lambdas
     def simulate(Theta):
@@ -554,7 +555,7 @@ def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
     #  generation loop
     for g, eps in enumerate(eps_schedule):
         
-        print(f"    gen {g}: start sampling with ε={eps:.3f}")
+        print(f"    gen {g}: start sampling with eps={eps:.3f}")
         if g == 0:
             #draw from PRIOR 
             pool = rng.choice(gammas_prior, size=N_particles, replace=True)
@@ -570,14 +571,14 @@ def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
             while len(pool) < N_particles:
                 # --------- safety guard --------------------------------------
                 if trials >= max_trials:
-                    # If we have fewer than stall_ratio*N_particles, relax ε
+                    # If we have fewer than stall_ratio*N_particles, relax eps
                     if len(pool) < stall_ratio * N_particles:
-                        eps *= 1.4                          # make threshold looser
-                        print(f"\n        ε relaxed to {eps:.3f} after {trials:,} trials "
+                        eps *= 1.4                          
+                        print(f"\n        eps relaxed to {eps:.3f} after {trials:,} trials "
                               f"(accepted {len(pool)})")
                         trials = 0                          # restart counter
                     else:
-                        # keep current ε but accept partial pool → resample
+                        # keep current eps but accept partial pool → resample
                         needed = N_particles - len(pool)
                         extra = rng.choice(pool, size=needed, replace=True)
                         pool.extend(extra)
@@ -620,7 +621,7 @@ def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
         # evidence Z_t ≈ mean prior × acceptance rate
         Z_t[g] = w.sum() / N_particles
 
-        print(f"ABC-SMC gen {g}:  ε = {eps:.3f}  –  "
+        print(f"ABC-SMC gen {g}:  eps = {eps:.3f}  –  "
               f"ESS = {1/np.sum(w**2):.1f}")
 
     return Z_t, thetas, weights
@@ -663,11 +664,11 @@ if __name__ == '__main__':
     
     observed_y, observed_yp,sol = simulate_observed_data(gamma_true, k, initial_conditions, (T[0], T[-1]), N, noise_level_s, noise_level_j)
         
-    W_min = 4                            # min number of points   (≈ 2Δt)
+    W_min = 20                            # min number of points   (≈ 2Δt)
     W_max = 50          # max number of points 
-    deltas= 4       # step by which W grows/shrinks
-    W_boot= 4           # first two bootstrap windows
-    err_hist = []               # store ε_r values to compare
+    deltas= 10       # step by which W grows/shrinks
+    W_boot= 30           # first two bootstrap windows
+    err_hist = []               # store eps_r values to compare
     
     
     P_e, P_t = [0.5], [0.5]             # model posteriors
@@ -695,6 +696,7 @@ if __name__ == '__main__':
         y0        = [y_slice[0], yp_slice[0]]
         
         
+        
         def euler_series(gamma, k, y0, t_grid):
             y = np.empty((2, len(t_grid)))
             y[:, 0] = y0
@@ -703,7 +705,13 @@ if __name__ == '__main__':
                 y[:, i+1] = y[:, i] + h * np.array(
                     damped_oscillator(t_grid[i], y[:, i], gamma, k))
             return y
-        
+        print("\n>>> Debug: sample distances for a few θ in the prior:")
+        for test_theta in [0.0, 0.5, 1.0, 0.3]:                       # pick a few points
+            sim = euler_series(test_theta, k, y0, t_slice)           # full trajectory
+            res = np.vstack([y_slice, yp_slice]) - sim
+            d = np.sqrt(np.mean((res / sigma_sl)**2))
+            print(f"    θ={test_theta:.2f}   distance={d:.3f}")
+        print(">>> end debug\n")
         
         def trapezoidal_series(gamma, k, y0, t_grid):
             y = np.empty((2, len(t_grid)))
@@ -752,7 +760,7 @@ if __name__ == '__main__':
         err_hist.append(eps_r)
     
         
-        if len(err_hist) > 1:                               # need ε_{r}^{(n-1)}
+        if len(err_hist) > 1:                               # need eps_{r}^{(n-1)}
             if err_hist[-2] < err_hist[-1]:             # error up = enlarge W
                 W = min(W + deltas, W_max)
             else:                                       # error down =  shrink  W
