@@ -5,7 +5,7 @@ from scipy.optimize import minimize
 import torch
 from scipy.misc import derivative
 import numdifftools as nd
-
+import time
 from scipy.integrate import quadrature
 
 def damped_oscillator(t, y, gamma, k):
@@ -529,7 +529,7 @@ def compute_Z_quadrature_E(observed_y_t, observed_yp_t,noise_level, k, y0, T, h)
 def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
    N_particles= 200,N_generations =6, eps_schedule= None, B_sim=1, rng = np.random.default_rng(0),):
     """
-    Returns θ-particles, weights, and normalising constant Z_t
+    Returns Theta-particles, weights, and normalising constant Z_t
     for every generation.
     """
     #default geometric threshold schedule
@@ -538,8 +538,8 @@ def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
         eps_schedule = eps_max * (0.4 ** np.arange(N_generations))
 
     # convenience lambdas
-    def simulate(θ):
-        sim = method(θ, k, initial_conditions, t_grid)
+    def simulate(Theta):
+        sim = method(Theta, k, initial_conditions, t_grid)
         return sim
 
     def distance(sim):
@@ -553,28 +553,61 @@ def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
 
     #  generation loop
     for g, eps in enumerate(eps_schedule):
+        
+        print(f"    gen {g}: start sampling with ε={eps:.3f}")
         if g == 0:
             #draw from PRIOR 
             pool = rng.choice(gammas_prior, size=N_particles, replace=True)
             w    = np.full(N_particles, 1 / N_particles)
         else:
             # importance-sample / perturb previous gen
-            pool = []
+            
             w = []
+            pool, trials = [], 0
+            t0 = time.perf_counter() 
+            max_trials = 30_000           
+            stall_ratio = 0.30 
             while len(pool) < N_particles:
+                # --------- safety guard --------------------------------------
+                if trials >= max_trials:
+                    # If we have fewer than stall_ratio*N_particles, relax ε
+                    if len(pool) < stall_ratio * N_particles:
+                        eps *= 1.4                          # make threshold looser
+                        print(f"\n        ε relaxed to {eps:.3f} after {trials:,} trials "
+                              f"(accepted {len(pool)})")
+                        trials = 0                          # restart counter
+                    else:
+                        # keep current ε but accept partial pool → resample
+                        needed = N_particles - len(pool)
+                        extra = rng.choice(pool, size=needed, replace=True)
+                        pool.extend(extra)
+                        print(f"\n        filled remaining {needed} particles by resample")
+                        break
+                # --------- safety guard --------------------------------------
+                
+                
+                
+                trials += 1
                 idx  = rng.choice(N_particles, p=weights[g-1])
-                θ    = thetas[g-1, idx] + rng.normal(0, 0.05)   # small RW step
-                if not (0 <= θ <= 1):
+                Theta    = thetas[g-1, idx] + rng.normal(0, 0.12)   # small RW step
+                if not (0 <= Theta <= 1):
                     continue
+                
                 # simulate B times, keep if ANY fits
                 keep = False
                 for _ in range(B_sim):
-                    sim = simulate(θ)
+                    sim = simulate(Theta)
                     if distance(sim) <= eps:
                         keep = True
                         break
                 if keep:
-                    pool.append(θ)
+                    pool.append(Theta)
+                    if trials % 2_000 == 0:
+                        elapsed = time.perf_counter() - t0
+                        acc_rate = len(pool) / trials
+                        print(f"        trials={trials:,}  "f"accepted={len(pool):3d}  "f"rate={acc_rate:6.4f}  "  
+                              f"time={elapsed:6.1f}s", end="\r")
+                    
             pool  = np.array(pool)
             # kernel density on previous gen
             denom = np.sum(weights[g-1][:, None] *
@@ -683,9 +716,9 @@ if __name__ == '__main__':
             return y
         
         
-        Z_e, θE, wE = abc_smc(euler_series, theta_prior,y_slice, yp_slice, sigma_sl, t_slice, N_particles=150, 
+        Z_e, Theta_E, wE = abc_smc(euler_series, theta_prior,y_slice, yp_slice, sigma_sl, t_slice, N_particles=5, 
                               N_generations=5)
-        Z_t, θT, wT = abc_smc(trapezoidal_series, theta_prior, y_slice, yp_slice, sigma_sl, t_slice, N_particles=150, 
+        Z_t, Theta_T, wT = abc_smc(trapezoidal_series, theta_prior, y_slice, yp_slice, sigma_sl, t_slice, N_particles=5, 
                               N_generations=5)   
     
         
