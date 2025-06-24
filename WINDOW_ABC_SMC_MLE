@@ -7,6 +7,9 @@ from scipy.misc import derivative
 import numdifftools as nd
 import time
 from scipy.integrate import quadrature
+from matplotlib.ticker import MaxNLocator
+from numpy.linalg import inv
+from scipy.integrate import quad
 
 def damped_oscillator(t, y, gamma, k):
     """
@@ -479,7 +482,7 @@ def find_POST_t(gammas,gamma_init, observed_y,observed_yp, noise_level, N, k, in
 
   
 
-def compute_Z_quadrature(observed_y_t, observed_yp_t,noise_level, k, y0, T, h, method):
+def compute_Z_quadrature1(observed_y_t, observed_yp_t,noise_level, k, y0, T, h, method):
     """
     Calculate the normalization constant Z using quadrature integration.
 
@@ -526,109 +529,260 @@ def compute_Z_quadrature_E(observed_y_t, observed_yp_t,noise_level, k, y0, T, h)
     Z, _ = quadrature(integrand, 0, 1, tol=1e-8, maxiter=10000)
     return Z
 
-def abc_smc(method, gammas_prior, y_obs, yp_obs, sigma_t, t_grid,
-   N_particles= 200,N_generations =6, eps_schedule= None, B_sim=1, rng = np.random.default_rng(0),):
+def abc_smc(method, theta_prior, y_obs, ydot_obs, sigma_t, t_grid, y0,
+            num_particles, num_generations, rng=None):
     """
-    Returns Theta-particles, weights, and normalising constant Z_t
-    for every generation.
+    Returns (thetas, weights, Z_values) for each generation.
+    Now Z_values[g] = approximate ABC marginal likelihood.
     """
-    #default geometric threshold schedule
-    if eps_schedule is None:
-        eps_max = np.max(np.abs(y_obs)) * 2
-        shrink  = 0.8 
-        eps_schedule = eps_max * (shrink ** np.arange(N_generations))
+    if rng is None:
+        rng = np.random.default_rng(0)
 
-    # convenience lambdas
-    def simulate(Theta):
-        sim = method(Theta, k, initial_conditions, t_grid)
-        return sim
+    thetas   = np.empty((num_generations, num_particles))
+    weights  = np.empty_like(thetas)
+    Z_values = np.zeros(num_generations)
 
-    def distance(sim):
-        res =np.vstack([y_obs, yp_obs]) - sim
-        return np.sqrt(np.mean((res / sigma_t) ** 2))
+    prev_distances = None
+    w_prev = None
 
-    # containers
-    thetas  = np.empty((N_generations, N_particles))
-    weights = np.empty_like(thetas)
-    Z_t  = np.empty(N_generations)
+    for g in range(num_generations):
+        # ─── initialize ABC counters ─────────────────────
+        accept_count = 0
+        total_count  = 0
 
-    #  generation loop
-    for g, eps in enumerate(eps_schedule):
-        
-        print(f"    gen {g}: start sampling with eps={eps:.3f}")
         if g == 0:
-            #draw from PRIOR 
-            pool = rng.choice(gammas_prior, size=N_particles, replace=True)
-            w    = np.full(N_particles, 1 / N_particles)
+            # 1) draw from prior
+            pool = rng.choice(theta_prior, size=num_particles, replace=True)
+            w    = np.full(num_particles, 1/num_particles)
+
+            accept_count = num_particles
+            total_count  = num_particles
+
+            distances = [compute_distance( simulate_model(method, th, k, y0, t_grid),y_obs, ydot_obs, sigma_t)
+                for th in pool
+            ]
+            eps = np.percentile(distances, 20)
+
         else:
-            # importance-sample / perturb previous gen
-            
-            w = []
-            pool, trials = [], 0
-            t0 = time.perf_counter() 
-            max_trials = 30_000           
-            stall_ratio = 0.30 
-            while len(pool) < N_particles:
-                # --------- safety guard --------------------------------------
-                if trials >= max_trials:
-                    # If we have fewer than stall_ratio*N_particles, relax eps
-                    if len(pool) < stall_ratio * N_particles:
-                        eps *= 1.4                          
-                        print(f"\n        eps relaxed to {eps:.3f} after {trials:,} trials "
-                              f"(accepted {len(pool)})")
-                        trials = 0                          # restart counter
-                    else:
-                        # keep current eps but accept partial pool → resample
-                        needed = N_particles - len(pool)
-                        extra = rng.choice(pool, size=needed, replace=True)
-                        pool.extend(extra)
-                        print(f"\n        filled remaining {needed} particles by resample")
-                        break
-                # --------- safety guard --------------------------------------
-                
-                
-                
+            eps = np.percentile(distances, 20)
+
+            pool = []
+            trials = 0
+            while len(pool) < num_particles:
                 trials += 1
-                idx  = rng.choice(N_particles, p=weights[g-1])
-                Theta    = thetas[g-1, idx] + rng.normal(0, 0.12)   # small RW step
-                if not (0 <= Theta <= 1):
+                idx  = rng.choice(num_particles, p=w_prev)
+                cand = thetas[g-1, idx] + rng.normal(0, 0.12)
+                if cand < 0 or cand > 1:
                     continue
-                
-                # simulate B times, keep if ANY fits
-                keep = False
-                for _ in range(B_sim):
-                    sim = simulate(Theta)
-                    if distance(sim) <= eps:
-                        keep = True
-                        break
-                if keep:
-                    pool.append(Theta)
-                    if trials % 2_000 == 0:
-                        elapsed = time.perf_counter() - t0
-                        acc_rate = len(pool) / trials
-                        print(f"        trials={trials:,}  "f"accepted={len(pool):3d}  "f"rate={acc_rate:6.4f}  "  
-                              f"time={elapsed:6.1f}s", end="\r")
-                    
-            pool  = np.array(pool)
-            # kernel density on previous gen
-            denom = np.sum(weights[g-1][:, None] *
-                           scipy.stats.norm.pdf(pool[None, :],loc=thetas[g-1, :, None],scale=0.05),axis=0)
-            w = scipy.stats.uniform.pdf(pool, 0, 1) / denom
+
+                total_count += 1
+                sim = simulate_model(method, cand, k, y0, t_grid)
+                dist = compute_distance(sim, y_obs, ydot_obs, sigma_t)
+
+                if dist <= eps:
+                    pool.append(cand)
+                    accept_count += 1
+
+                elif total_count > 100_000:
+                    needed = num_particles - len(pool)
+                    extras = rng.choice(theta_prior, size=needed, replace=True)
+                    pool.extend(extras.tolist())
+                    break
+
+            pool = np.array(pool)
+
+            distances = [compute_distance(simulate_model(method, th, k, y0, t_grid),y_obs, ydot_obs, sigma_t )
+                for th in pool
+            ]
+
+            # importance weight correction
+            kern = scipy.stats.norm.pdf( pool[None, :],loc=thetas[g-1, :, None],scale=0.12)
+            denom = np.dot(w_prev, kern)
+            w = 1.0 / (denom * len(theta_prior))
             w /= w.sum()
 
+        # ─── store results ──────────────────────────────
         thetas[g]  = pool
         weights[g] = w
-        # evidence Z_t ≈ mean prior × acceptance rate
-        Z_t[g] = w.sum() / N_particles
 
-        print(f"ABC-SMC gen {g}:  eps = {eps:.3f}  –  "
-              f"ESS = {1/np.sum(w**2):.1f}")
+        # ABC marginal likelihood estimate
+        if total_count > 0:
+            Z_values[g] = accept_count / total_count * np.mean(w)
+        else:
+            Z_values[g] = 0.0
 
-    return Z_t, thetas, weights
+        prev_distances = distances
+        w_prev = w.copy()
+
+        ESS = 1.0 / np.sum(w**2)
+        print(f"gen {g}: eps={eps:.3f}, ESS={ESS:.1f}, Z={Z_values[g]:.3e}")
+
+    return thetas, weights, Z_values
+
+def euler_series(gamma, k, y0, t_grid):
+    y = np.empty((2, len(t_grid)))
+    y[:, 0] = y0
+    for i in range(len(t_grid) - 1):
+        h = t_grid[i+1] - t_grid[i]
+        y[:, i+1] = y[:, i] + h * np.array(
+            damped_oscillator(t_grid[i], y[:, i], gamma, k))
+    return y
+
+
+def trapezoidal_series(gamma, k, y0, t_grid):
+    y = np.empty((2, len(t_grid)))
+    y[:, 0] = y0
+    for i in range(len(t_grid) - 1):
+        h   = t_grid[i+1] - t_grid[i]
+        f_n = np.array(damped_oscillator(t_grid[i], y[:, i], gamma, k))
+        y_pred = y[:, i] + h * f_n
+        f_np1  = np.array(damped_oscillator(t_grid[i+1], y_pred, gamma, k))
+        y[:, i+1] = y[:, i] + 0.5*h*(f_n + f_np1)
+    return y
+
+
+
+
+def simulate_model(method, theta, k_val, y0_val, t_grid):
+    """
+    Run the solver (Euler or trapezoidal) for a full trajectory.
+    Returns a (2, len(t_grid)) array.
+    """
+    return method(theta, k_val, y0_val, t_grid)
+
+def compute_distance(sim, y_obs, ydot_obs, sigma_t):
+    y_sim, ydot_sim = sim
+    dy = (y_sim - y_obs) / sigma_t
+    dyp = (ydot_sim - ydot_obs) / sigma_t
+    return np.sqrt(np.mean(dy**2 + 3 * dyp**2)) 
+
+
+
+from scipy.integrate import quad
+
+def compute_Z_integral(method, y_obs, ydot_obs, sigma_t, k_val, y0_val, t_grid):
+    """
+    Numerically integrate over θ∈[0,1]:
+      Z = ∫ p(y_obs|θ) dθ
+    using a log-sum-exp trick to avoid underflow.
+    """
+    # Step 1: estimate the maximum log-likelihood across theta grid
+    theta_grid = np.linspace(0, 1, 101)
+    log_likelihoods = []
+    for theta in theta_grid:
+        sim = method(theta, k_val, y0_val, t_grid)
+        ll = np.sum(log_likelihood(sim, y_obs, ydot_obs, sigma_t))
+        log_likelihoods.append(ll)
+    max_ll = np.max(log_likelihoods)
+
+    # Step 2: define underflow-safe integrand
+    def integrand(theta):
+        sim = method(theta, k_val, y0_val, t_grid)
+        ll = np.sum(log_likelihood(sim, y_obs, ydot_obs, sigma_t))
+        return np.exp(ll - max_ll)
+
+    # Step 3: integrate and rescale
+    Z_raw, _ = quad(integrand, 0.0, 1.0, epsabs=1e-6)
+    Z = Z_raw * np.exp(max_ll)
+    return Z
+
+
+
+# ─── EKF‐within‐window ───────────────────────────────────────────────────
+def ekf_window(thetas, weights, y_obs, t_grid,
+               g_func, h_func, Q, R, x0, P0, λ=0.99):
+    Np = len(thetas)
+    dim = len(x0)
+    Xp = np.zeros((Np,dim))
+    Pp = np.zeros((Np,dim,dim))
+
+    for i, θ in enumerate(thetas):
+        x_i, P_i = x0.copy(), P0.copy()
+        for j in range(len(t_grid)-1):
+            dt = t_grid[j+1]-t_grid[j]
+            # predict
+            x_pred, G = g_func(x_i, θ, dt)
+            P_pred = (G@P_i@G.T)/λ + Q
+            # update
+            y_meas = y_obs[j+1]
+            h_pred, H = h_func(x_pred)
+            S = H@P_pred@H.T + R
+            K = P_pred@H.T @ inv(S)
+            x_i = x_pred + K@(y_meas - h_pred)
+            P_i = (np.eye(dim)-K@H)@P_pred
+
+        Xp[i] = x_i
+        Pp[i] = P_i
+
+    # combine
+    x_mean = np.average(Xp, axis=0, weights=weights)
+    cov = np.zeros_like(P0)
+    for i in range(Np):
+        dx = (Xp[i]-x_mean)[:,None]
+        cov += weights[i]*(Pp[i] + dx@dx.T)
+    return x_mean, cov
+
+# ─── dynamics & observation Jacobians ──────────────────────────────────
+def g_with_jacobian(x, θ, dt):
+    # continuous F matrix
+    F = np.array([[0,1],[-k/m, -θ/m]])
+    G = np.eye(2) + F*dt
+    x_next = G@x
+    return x_next, G
+
+def h_and_jacobian(x):
+    # measure posistionm & velosity directly
+    H = np.eye(2)
+    return x, H
+
+
+
+
+
+
+from scipy.special import logsumexp
+
+def compute_Z_grid(method, y_obs, ydot_obs, sigma_t,
+                   k_val, y0_val, t_grid, theta_prior):
+    """
+    Approximate Z = ∫₀¹ p(y|θ) dθ
+    on the discrete theta_prior by
+      logZ ≈ logsumexp( log p(y|θ_j) ) - log(N)
+    (since ∆θ = 1/N for uniform grid).
+    """
+    # 1) compute log‐likelihoods on the same window:
+    logLs = []
+    for θ in theta_prior:
+        sim = method(θ, k_val, y0_val, t_grid)      # (2, len(t_grid))
+        # sum over both position & velocity
+        ll  = np.sum(log_likelihood(sim, y_obs, ydot_obs, sigma_t))
+        logLs.append(ll)
+    logLs = np.array(logLs)
+
+    # 2) use logsumexp to get logZ
+    #    grid has N points in [0,1] so ∆θ = 1/N
+    N = len(theta_prior)
+    logZ = logsumexp(logLs) - np.log(N)
+
+    # 3) back to normal space
+    return np.exp(logZ)
+    
+
+def compute_Z_quadrature(observed_y_t, observed_yp_t, noise_level,
+                         k, y0, T, h, method):
+    """
+    Calculate the normalization constant Z using quadrature integration.
+    """
+    integrand = lambda gamma: np.exp(
+        np.sum(   # <— sum over the whole window
+          log_likelihood(method(gamma, k, y0, T),observed_y_t, observed_yp_t,noise_level )))
+
 
 
 
 if __name__ == '__main__':   
+   
+
     
     #print('debug=',combined_log_likelihood)
     # Parameters 
@@ -639,7 +793,7 @@ if __name__ == '__main__':
     Dimention_of_parameter_space = 1
     gammas = np.linspace(0, 1, number_of_gammas)
     
-    N = 200
+    N = 1000
     
     T = np.linspace(0, 10, N)
     check_points = [1,5,8]
@@ -649,8 +803,8 @@ if __name__ == '__main__':
     
     sigma = 0.1
     #sigma_yp = 0.1
-    noise_level_s = 0.05
-    noise_level_j = 0.05
+    noise_level_s = 0.005
+    noise_level_j = 0.005
     noise_level = 0.05
     c1=1e-4
     c2=0.9
@@ -660,114 +814,180 @@ if __name__ == '__main__':
     gamma_init = 0.5
     gamma_true = 0.3
     
-    
+    P0 = np.eye(2)*1e2   # large prior cov
+    Q  = np.eye(2)*1e-6  # tiny process noise
+    R  = np.eye(2)*0.1**2
     
     observed_y, observed_yp,sol = simulate_observed_data(gamma_true, k, initial_conditions, (T[0], T[-1]), N, noise_level_s, noise_level_j)
         
-    W_min = 20                            # min number of points   (≈ 2Δt)
-    W_max = 50          # max number of points 
-    deltas= 10       # step by which W grows/shrinks
-    W_boot= 30           # first two bootstrap windows
-    err_hist = []               # store eps_r values to compare
+    W_min = 20     # min size of time window 
+    W_max = 50       # max size of time window 
+    deltas= 10 # step by which W grows/shrinks
+    W_boot= 30        # first two bootstrap windows
+    err_hist = []        # store eps_r values to compare
     
     
     P_e, P_t = [0.5], [0.5]             # model posteriors
     Z_e, Z_t = [1.], [1.]               # evidence trackers
     W = W_boot                       # current window size
     t_idx= 2                                # first index with a full W
+    
     theta_prior = np.linspace(0, 1, 101)
     Z_e_hist, Z_t_hist = [], []
+    Z_e_int_hist, Z_t_int_hist = [], []
     P_e_hist, P_t_hist = [0.5], [0.5]
+    X_e_hist, X_t_hist = [], []
+    Z_e_err_hist   = []
+    err_hist = []
+    Z_t_err_hist   = []
+    x_e_err_hist   = []
+    x_t_err_hist   = []
     
-    
-    while t_idx < len(T):
-        idx_start = max(0, t_idx - W + 1)
-        idx_end   = t_idx + 1                           # Python slice upper bound
-    
-       
-        #p_e, p_t, P_E, P_T, Z_E, Z_T, Z_e, Z_t = find_POST_t(gammas, gamma_init, observed_y[idx_start:idx_end],
-       #observed_yp[idx_start:idx_end], noise_level, N = W,k = k, initial_conditions =[observed_y[idx_start], 
-         #observed_yp[idx_start]], T = T[idx_start:idx_end],tol=tol, eta_init=eta_init, c1=c1, c2=c2, M=2)
-        
-        t_slice   = T[idx_start:idx_end]
-        y_slice   = observed_y[idx_start:idx_end]
-        yp_slice  = observed_yp[idx_start:idx_end]
-        sigma_sl  = np.where(t_slice <= t_slice[-1]/2, noise_level_s, noise_level_j)
-        y0        = [y_slice[0], yp_slice[0]]
-        
-        
-        
-        def euler_series(gamma, k, y0, t_grid):
-            y = np.empty((2, len(t_grid)))
-            y[:, 0] = y0
-            for i in range(len(t_grid) - 1):
-                h = t_grid[i+1] - t_grid[i]
-                y[:, i+1] = y[:, i] + h * np.array(
-                    damped_oscillator(t_grid[i], y[:, i], gamma, k))
-            return y
-        print("\n>>> Debug: sample distances for a few θ in the prior:")
-        for test_theta in [0.0, 0.5, 1.0, 0.3]:                       # pick a few points
-            sim = euler_series(test_theta, k, y0, t_slice)           # full trajectory
-            res = np.vstack([y_slice, yp_slice]) - sim
-            d = np.sqrt(np.mean((res / sigma_sl)**2))
-            print(f"    θ={test_theta:.2f}   distance={d:.3f}")
-        print(">>> end debug\n")
-        
-        def trapezoidal_series(gamma, k, y0, t_grid):
-            y = np.empty((2, len(t_grid)))
-            y[:, 0] = y0
-            for i in range(len(t_grid) - 1):
-                h   = t_grid[i+1] - t_grid[i]
-                f_n = np.array(damped_oscillator(t_grid[i],   y[:, i], gamma, k))
-                y_pred = y[:, i] + h * f_n
-                f_np1  = np.array(damped_oscillator(t_grid[i+1], y_pred, gamma, k))
-                y[:, i+1] = y[:, i] + 0.5 * h * (f_n + f_np1)
-            return y
-        
-        
-        Z_e_all, Theta_E, wE  = abc_smc(euler_series, theta_prior,y_slice, yp_slice, sigma_sl, t_slice, N_particles=5, 
-                              N_generations=5)
-        Z_t_all, Theta_T, wT = abc_smc(trapezoidal_series, theta_prior, y_slice, yp_slice, sigma_sl, t_slice, N_particles=5, 
-                              N_generations=5)   
-    
-        Z_e_hat = float(Z_e_all[-1])
-        Z_t_hat = float(Z_t_all[-1])
+    y0_e = np.array(initial_conditions, dtype=float)
+    y0_t = np.array(initial_conditions, dtype=float)   
+    W = W_boot
+    num_particles=100;num_generations=10
+
+    for t_idx in [W_boot - 1, 2 * W_boot - 1]:
+        idx0, idx1 = t_idx - W + 1, t_idx + 1
+        t_slice    = T[idx0:idx1]
+        y_slice    = observed_y[idx0:idx1]
+        yp_slice   = observed_yp[idx0:idx1]
+        sigma_sl   = np.where(t_slice <= t_slice[-1]/2,
+                              noise_level_s, noise_level_j)
+
+        # — make y0 available to abc_smc via the global name y0 —
+        y0 = y0_e
+        thetaE, wE, Z_e_vals = abc_smc( euler_series, theta_prior,y_slice, yp_slice,
+                                       sigma_sl, t_slice, y0_e, num_particles,num_generations )
+        Z_e_hat = np.prod(Z_e_vals)
         Z_e_hist.append(Z_e_hat)
-        Z_t_hist.append(Z_t_hat)    
-        #abc only:keep the last posterior/evidence of this window
-        if P_e_hist:                             # history exists
-            Pe_prev = P_e_hist[-1]
-            Pt_prev = P_t_hist[-1]
-        else:                                    # first iteration
-            Pe_prev, Pt_prev = [0.5], [0.5]
-        
-        Pe_next = Pe_prev * Z_e_hat / (Pe_prev * Z_e_hat + Pt_prev * Z_t_hat)
-        Pt_next = 1.0 - Pe_next
+
+        # — EKF update for Euler, carry forward —
+        x_e, P_e = ekf_window(
+            thetas=thetaE[-1], weights=wE[-1],
+            y_obs=y_slice, t_grid=t_slice,
+            g_func=lambda x, θ, dt: ( x + dt * np.array(damped_oscillator(None, x, θ, k)),  np.array([[1, dt], [-k*dt, 1-θ*dt]]) ),
+            h_func=lambda x: (x, np.eye(2)), Q=Q, R=R, x0=y0_e, P0=P0 )
+        X_e_hist.append(x_e)
+        y0_e = x_e  # next window’s starting state
+
+        # — now do trapezoidal with its own y0 —
+        y0 = y0_t
+        thetaT, wT, Z_t_vals = abc_smc(trapezoidal_series,theta_prior, y_slice, yp_slice, sigma_sl,
+            t_slice,y0_t, num_particles,num_generations)
+        Z_t_hat = np.prod(Z_t_vals)
+        Z_t_hist.append(Z_t_hat)
+
+        x_t, P_t = ekf_window(
+            thetas=thetaT[-1], weights=wT[-1],
+            y_obs=y_slice, t_grid=t_slice,
+            g_func=lambda x, θ, dt: ( x + dt * np.array(damped_oscillator(None, x, θ, k)),np.array([[1, dt], [-k*dt, 1-θ*dt]]) ),
+            h_func=lambda x: (x, np.eye(2)),Q=Q, R=R, x0=y0_t, P0=P0 )
+        X_t_hist.append(x_t)
+        y0_t = x_t
+
+        # — direct integral (diagnostic) —
+        Ze_int = compute_Z_integral( euler_series, y_slice, yp_slice, sigma_sl, k, y0_e, t_slice )
+        Zt_int = compute_Z_integral( trapezoidal_series,  y_slice, yp_slice, sigma_sl,  k, y0_t, t_slice)
+        Z_e_int_hist.append(Ze_int)
+        Z_t_int_hist.append(Zt_int)
+
+        # — update model posteriors (ABC only) —
+        Pe, Pt = P_e_hist[-1], P_t_hist[-1]
+        Pe_next = Pe * Z_e_hat / (Pe*Z_e_hat + Pt*Z_t_hat)
         P_e_hist.append(Pe_next)
-        P_t_hist.append(Pt_next)
-                
-        
-        
-        # keep the last posterior/evidence of this window
-        #P_e.append(p_e[-1]);  P_t.append(p_t[-1])
-        #Z_e.append(Z_e[-1]);  Z_t.append(Z_t[-1])
-    
-        
-        y_hat = observed_y[idx_start:idx_end]                                   # forecast = y_{t-1} here
-        y_obs = observed_y[idx_start:idx_end]
-        rmse  = np.sqrt(np.mean((y_hat - y_obs)**2))
-        eps_r = rmse / (observed_y.max() - observed_y.min())
-        err_hist.append(eps_r)
-    
-        
-        if len(err_hist) > 1:                               # need eps_{r}^{(n-1)}
-            if err_hist[-2] < err_hist[-1]:             # error up = enlarge W
-                W = min(W + deltas, W_max)
-            else:                                       # error down =  shrink  W
-                W = max(W - deltas, W_min)
-    
-        
-        t_idx += 1
+        P_t_hist.append(1.0 - Pe_next)
+
+        # — Mahalanobis‐style error (for window adapt) —
+        res  = np.array([y_slice[-1] - y0_e[0], yp_slice[-1] - y0_e[1]])
+        epsr = np.sqrt(res.T @ inv(P_e + R) @ res)
+        err_hist.append(epsr)
+
+    # ─── Sliding/adaptive windows until end ──────────────────────
+    t_idx = 2*W_boot - 1
+    while True:
+        t_idx = min(N-1, t_idx + W)
+        idx0, idx1 = max(0, t_idx - W + 1), t_idx + 1
+        t_slice    = T[idx0:idx1]
+        y_slice    = observed_y[idx0:idx1]
+        yp_slice   = observed_yp[idx0:idx1]
+        sigma_sl   = np.where(t_slice <= t_slice[-1]/2,
+                              noise_level_s, noise_level_j)
+
+        # — Euler ABC & EKF, using y0_e —
+        y0 = y0_e
+        thetaE, wE, Z_e_vals = abc_smc(euler_series, theta_prior, y_slice, yp_slice,sigma_sl, t_slice,y0_e,
+            num_particles, num_generations)
+        Z_e_hat = np.prod(Z_e_vals); Z_e_hist.append(Z_e_hat)
+        x_e, P_e = ekf_window(
+            thetas=thetaE[-1], weights=wE[-1],
+            y_obs=y_slice, t_grid=t_slice,
+            g_func=lambda x, θ, dt: (  x + dt * np.array(damped_oscillator(None, x, θ, k)),np.array([[1, dt], [-k*dt, 1-θ*dt]])),
+            h_func=lambda x: (x, np.eye(2)),Q=Q, R=R, x0=y0_e, P0=P0 )
+        X_e_hist.append(x_e); y0_e = x_e
+
+        # — Trapezoid ABC & EKF, using y0_t —
+        y0 = y0_t
+        thetaT, wT, Z_t_vals = abc_smc( trapezoidal_series, theta_prior,y_slice, yp_slice,sigma_sl, t_slice,y0_t,
+            num_particles, num_generations )
+        Z_t_hat = np.prod(Z_t_vals); Z_t_hist.append(Z_t_hat)
+        x_t, P_t = ekf_window(thetas=thetaT[-1], weights=wT[-1],y_obs=y_slice, t_grid=t_slice,
+                   g_func=lambda x, θ, dt: (x + dt * np.array(damped_oscillator(None, x, θ, k)),np.array([[1, dt], [-k*dt, 1-θ*dt]])),
+            h_func=lambda x: (x, np.eye(2)),
+            Q=Q, R=R, x0=y0_t, P0=P0)
+        X_t_hist.append(x_t); y0_t = x_t
+
+        # — direct integral again for diagnostics —
+        Ze_int = compute_Z_integral(euler_series, y_slice, yp_slice, sigma_sl,  k, y0_e, t_slice )
+        Zt_int = compute_Z_integral( trapezoidal_series, y_slice, yp_slice, sigma_sl,k, y0_t, t_slice)
+        Z_e_int_hist.append(Ze_int)
+        Z_t_int_hist.append(Zt_int)
+
+        # — model posterior update —
+        Pe, Pt = P_e_hist[-1], P_t_hist[-1]
+        Pe_next = Pe * Z_e_hat / (Pe*Z_e_hat + Pt*Z_t_hat)
+        P_e_hist.append(Pe_next)
+        P_t_hist.append(1.0 - Pe_next)
+
+        # — error & adapt window —
+        res  = np.array([y_slice[-1] - y0_e[0],
+                         yp_slice[-1] - y0_e[1]])
+        epsr = np.sqrt(res.T @ inv(P_e + R) @ res)
+        err_hist.append(epsr)
+        if len(err_hist) > 1:
+            W = min(W+deltas, W_max) if err_hist[-2] < err_hist[-1] \
+                else max(W-deltas, W_min)
+
+        if t_idx == N-1:
+            break
+
+    # ─── Final plots ─────────────────────────────────────────────
+    x = np.arange(len(Z_e_hist))
+
+    # 1) Euler: ABC vs direct‐integral
+    plt.figure(figsize=(8,4))
+    plt.plot(x, Z_e_hist,    'o-', label='Z_e (ABC)')
+    plt.plot(x, Z_e_int_hist,'s--',label='Z_e (integral)')
+    plt.yscale('log')
+    plt.title('Euler evidence: ABC vs integral')
+    plt.legend(); plt.grid(which='both', alpha=0.3); plt.show()
+
+    # 2) Trapezoid: ABC vs direct‐integral
+    plt.figure(figsize=(8,4))
+    plt.plot(x, Z_t_hist,    'o-', label='Z_t (ABC)')
+    plt.plot(x, Z_t_int_hist,'s--',label='Z_t (integral)')
+    plt.yscale('log')
+    plt.title('Trapezoid evidence: ABC vs integral')
+    plt.legend(); plt.grid(which='both', alpha=0.3); plt.show()
+
+    # 3) Bayes factor from ABC only
+    BF_abc = np.array(Z_t_hist) / np.array(Z_e_hist)
+    plt.figure(figsize=(8,4))
+    plt.plot(BF_abc, 'o-', label='BF = Z_t/Z_e')
+    plt.axhline(1.0, color='k', lw=1)
+    plt.title('Bayes factor (ABC only)')
+    plt.legend(); plt.grid(alpha=0.3); plt.show()
     
     #p_e, p_t , P_E, P_T ,Z_E,Z_T,Z_e,Z_t = find_POST_t(gammas,gamma_init,observed_y, observed_yp,noise_level, N, k, initial_conditions, T,  tol, eta_init, c1, c2, M=2)
     #print("Z_e=",Z_e)  
@@ -801,130 +1021,72 @@ if __name__ == '__main__':
     
     
     
-    # Plot posterior evolution 
     Lp = min(len(P_e_hist), len(P_t_hist))
     if Lp > 0:
-        x_p = np.arange(1, Lp + 1)
-        Pe = P_e_hist[:Lp]
-        Pt = P_t_hist[:Lp]
-    
-        plt.figure(figsize=(8, 5))
-        plt.plot(x_p, Pe, marker='o', linestyle='-', color='blue', label=r'$P_e$ (Euler)')
-        plt.plot(x_p, Pt, marker='s', linestyle='--', color='red',  label=r'$P_t$ (Trap)')
-        plt.xlabel('Window index')
-        plt.ylabel('Model posterior')
-        plt.title('Evolution of model‐posterior $P_e$ vs.\ $P_t$')
-        plt.ylim(-0.05, 1.05)
-        plt.xticks(x_p)
-        plt.legend()
-        plt.grid(alpha=0.3)
-        plt.tight_layout()
+        x = np.arange(1, Lp+1)
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(x, P_e_hist[:Lp],
+                marker='o', linestyle='-',  color='blue',  label=r'$P_e$ (Euler)')
+        ax.plot(x, P_t_hist[:Lp],
+                marker='s', linestyle='--', color='red',   label=r'$P_t$ (Trap)')
+        ax.set_xlabel('Window index')
+        ax.set_ylabel('Model posterior')
+        ax.set_title('Evolution of model‐posterior $P_e$ vs.\ $P_t$')
+        ax.set_ylim(-0.05, 1.05)
+        # only show up to 10 ticks
+        step = max(1, Lp // 10)
+        ax.set_xticks(x[::step])
+        ax.set_xticklabels(x[::step], rotation=45, ha='right')
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.grid(alpha=0.3)
+        fig.tight_layout()
         plt.show()
     else:
-        print("Warning: no P-history to plot.")
+        print("No posterior history to plot.")
     
-    # Plot evidence evolution
-    Lz = min(len(Z_e_hist), len(Z_t_hist))
+    
+    # ——— 2) Improved Evidence plot —————————————————————————————————
+    Lz = len(Z_e_hist)
     if Lz > 0:
-        x_z = np.arange(1, Lz + 1)
-        Ze = Z_e_hist[:Lz]
-        Zt = Z_t_hist[:Lz]
+        x = np.arange(1, Lz+1)
     
-        plt.figure(figsize=(8, 5))
-        plt.plot(x_z, Ze, marker='o', linestyle='-',  color='blue', label=r'$Z_e$ (Euler)')
-        plt.plot(x_z, Zt, marker='s', linestyle='--', color='red',  label=r'$Z_t$ (Trap)')
-        plt.xlabel('Window index')
-        plt.ylabel('Evidence $Z$')
-        plt.title('Evolution of evidence $Z_e$ vs.\ $Z_t$')
-        plt.yscale('log')
-        plt.xticks(x_z)
-        plt.legend()
-        plt.grid(alpha=0.3, which='both')
-        plt.tight_layout()
+        fig, ax = plt.subplots(figsize=(12, 5))
+    
+        # 1) raw scatter
+        ax.scatter(x, Z_e_hist,
+                   color='C0', alpha=0.4, s=30,
+                   label=r'$Z_e$ (Euler)')
+        ax.scatter(x, Z_t_hist,
+                   color='C1', alpha=0.4, s=30,
+                   label=r'$Z_t$ (Trap)')
+    
+        # 2) moving average smooth
+        window = 5
+        if Lz >= window:
+            kernel = np.ones(window)/window
+            Ze_smooth = np.convolve(Z_e_hist, kernel, mode='valid')
+            Zt_smooth = np.convolve(Z_t_hist, kernel, mode='valid')
+            xs = x[(window-1)//2 : -(window//2)]
+            ax.plot(xs, Ze_smooth, color='C0', lw=2, label='Z$_e$ (smoothed)')
+            ax.plot(xs, Zt_smooth, color='C1', lw=2, label='Z$_t$ (smoothed)')
+    
+        # layout
+        ax.set_xlabel('Window index')
+        ax.set_ylabel('Evidence $Z$')
+        ax.set_title('End-of-Window Evidence: Raw & 5-window Moving Average')
+        ax.set_yscale('linear')              # linear for 0.1–0.5 range
+        # at most 10 ticks
+        step = max(1, Lz//10)
+        ax.set_xticks(x[::step])
+        ax.set_xticklabels(x[::step], rotation=45, ha='right')
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.grid(alpha=0.3)
+        ax.legend(loc='upper right')
+        fig.tight_layout()
         plt.show()
     else:
-        print("Warning: no Z-history to plot.")
-        
+        print("No evidence history to plot.")
     
+
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-# =============================================================================
-#     data_length = len(p_e)
-#     x_values = np.arange(1, 1 + data_length * 0.5, 0.5)
-#     plt.figure(figsize=(10, 6))
-# 
-#     
-#     plt.plot(x_values, p_e, label='p_e', marker='o', linestyle='-', color='blue')
-#     plt.plot(x_values, p_t, label='p_t', marker='o', linestyle='-', color='red')
-#     plt.xlabel('Time')
-#     plt.ylabel('Probability')
-#     plt.title('Comparison of p_e and p_t Over Time')
-#     plt.legend()
-#     plt.grid(True)
-#     plt.show()
-#     
-#     
-#     
-# 
-# 
-#     data_length = len(Z_e)
-#     x_values = np.arange(1, 1 + data_length * 0.5, 0.5)
-#     plt.figure(figsize=(14, 8))
-# 
-#     
-#     plt.plot(x_values, Z_e, label='Z_e', marker='o', linestyle='-', color='blue', alpha=0.5)
-#     plt.plot(x_values, Z_E, label='Z_E', marker='x', linestyle='--', color='blue', alpha=0.8)
-#     
-#     plt.plot(x_values, Z_t, label='Z_t', marker='o', linestyle='-', color='red', alpha=0.5)
-#     plt.plot(x_values, Z_T, label='Z_T', marker='x', linestyle='--', color='red', alpha=0.8)
-#     
-#    
-#     for i in range(len(Z_e)):
-#         if Z_e[i] > Z_E[i]:
-#             plt.text(x_values[i], Z_e[i], 'Z_e', fontsize=9, ha='center', color='blue')
-#         else:
-#             plt.text(x_values[i], Z_E[i], 'Z_E', fontsize=9, ha='center', color='blue')
-#                 
-#     for i in range(len(Z_t)):
-#         if Z_t[i] > Z_T[i]:
-#             plt.text(x_values[i], Z_t[i], 'Z_t', fontsize=9, ha='center', color='red')
-#         else:
-#             plt.text(x_values[i], Z_T[i], 'Z_T', fontsize=9, ha='center', color='red')
-#                 
-#     plt.xlabel('Time')
-#     plt.ylabel('Value')
-#     plt.title('Comparison of Z_e, Z_E, Z_t, and Z_T Over Time')
-#     plt.legend()
-#     plt.grid(True)
-#     plt.show()
-#      
-#     
-#     
-# 
-#     agreement_status = []
-#     for i in range(len(p_e)):
-#         if (p_e[i] > p_t[i] and P_E[i] > P_T[i]) or (p_t[i] > p_e[i] and P_T[i] > P_E[i]):
-#             agreement_status.append(1)  
-#         else:
-#             agreement_status.append(0)
-# 
-#     plt.figure(figsize=(10, 6))
-#     for i, status in enumerate(agreement_status):
-#         color = 'green' if status == 1 else 'red'
-#         plt.scatter(i, 1, color=color)  # Place the dot on y=1 for simplicity
-# 
-#     plt.xlabel('Time Step')
-#     plt.ylabel('Agreement')
-#     plt.title('Agreement between p_e, p_t and P_E,P_T at Each Time Step')
-#     plt.grid(True)
-#     plt.show()
-# =============================================================================
+
