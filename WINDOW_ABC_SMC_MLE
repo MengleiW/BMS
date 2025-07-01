@@ -358,42 +358,29 @@ def abc_smc_improved(method, theta_prior, y_obs, ydot_obs, sigma_t, t_grid, y0_v
             print(f"    Final: eps={eps:.3f}, ESS={ESS:.1f}, median_dist={median_dist:.3f}")
 
     # Return particles, weights, and placeholder for evidence
-    return thetas, weights, 1.0
+    return thetas, weights, 666
 
 def ekf_window(thetas, weights, y_obs, yp_obs, t_grid, k_val,
                Q, R, x0, P0, λ=0.99):
     """
     EKF within window for ensemble of particles.
 
-    Parameters
-    ----------
-    thetas : array_like
-        Parameter values for each particle.
-    weights : array_like
-        Importance weights for each particle.
-    y_obs : array_like
-        Observed positions.
-    yp_obs : array_like
-        Observed velocities.
-    t_grid : array_like
-        Time points.
-    k_val : float
-        Stiffness coefficient.
-    Q : ndarray, shape (2, 2)
-        Process noise covariance.
-    R : ndarray, shape (2, 2)
-        Measurement noise covariance.
-    x0 : array_like, shape (2,)
-        Initial state estimate.
-    P0 : ndarray, shape (2, 2)
-        Initial covariance estimate.
-    λ : float, optional
-        Forgetting factor.
+
+    thetas : array_like, Parameter values for each particle.
+    weights : array_like,Importance weights for each particle.
+    y_obs : array_like,  Observed positions.
+    yp_obs : array_like,Observed velocities.
+    t_grid : array_like,  Time points.
+    k_val : float, Stiffness coefficient.
+    Q : ndarray, shape (2, 2),Process noise covariance.
+    R : ndarray, shape (2, 2), Measurement noise covariance.
+    x0 : array_like, shape (2,), Initial state estimate.
+    P0 : ndarray, shape (2, 2), Initial covariance estimate.
+    λ : float, optional, Forgetting factor.
 
     Returns
-    -------
-    tuple
-        (x_mean, cov) where x_mean is the weighted mean state estimate
+
+    tuple, (x_mean, cov) where x_mean is the weighted mean state estimate
         and cov is the weighted covariance.
     """
     Np = len(thetas)
