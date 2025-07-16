@@ -79,11 +79,11 @@ def analytical_solution(t, gamma, k, y0):
         sol[0, i] = position at t[i],
         sol[1, i] = velocity at t[i].
     """
-    omega0 = np.sqrt(k)
-    zeta = gamma / (2 * omega0)
+    omega0 = np.sqrt(k) #Natural frequency of the undamped oscillator
+    zeta = gamma / (2 * omega0) #Damping ratio
     
     if zeta < 1:  # Underdamped case (our case)
-        omega_d = omega0 * np.sqrt(1 - zeta**2)
+        omega_d = omega0 * np.sqrt(1 - zeta**2)#Damped frequency
         A = y0[0]  # Initial position
         B = (y0[1] + zeta * omega0 * y0[0]) / omega_d  # Modified initial velocity
         
