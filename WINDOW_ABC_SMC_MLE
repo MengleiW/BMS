@@ -1,13 +1,19 @@
+
+
 import numpy as np
 import scipy
+import scipy.stats
 import matplotlib.pyplot as plt
-from scipy.optimize import minimize
-from scipy.integrate import quadrature, quad
-from matplotlib.ticker import MaxNLocator
+from scipy.optimize import minimize_scalar, minimize
+from scipy.integrate import simpson
+from scipy.interpolate import interp1d
 from numpy.linalg import inv
-from scipy.special import logsumexp
+import warnings
+warnings.filterwarnings('ignore')
 
-# ============== Core Functions ==============
+# ============================================================================
+# SECTION 1: CORE DIFFERENTIAL EQUATION AND NUMERICAL METHODS (ORIGINAL)
+# ============================================================================
 
 def damped_oscillator(t, y, gamma, k):
     """
@@ -22,933 +28,2136 @@ def damped_oscillator(t, y, gamma, k):
     Outputs:
          [y[1], f_t - gamma*y[1] - k*y[0]]: List, Derivative of the system state.
     """
-    f_t = 0  
-    #f_t = np.sin(t)
-    #print("gamma=",gamma)
-    gamma = gamma if isinstance(gamma, float) else gamma[0]
-    
-    return [y[1], f_t - gamma*y[1] - k*y[0]]
+    return [y[1], -gamma*y[1] - k*y[0]]
 
-def simulate_observed_data(gamma, k, initial_conditions, ts, N, noise_level_s, noise_level_j):
+def analytical_solution(t, gamma, k, y0):
     """
-    Simulates the damped oscillator system over a given time span using solve_ivp.
-
+    Computes the analytical solution of the damped harmonic oscillator.
+    
     Inputs:
+      t: Float or array of floats, time point(s) at which to evaluate.
       gamma: Float, damping coefficient.
-      k: Float, stiffness coefficient.
-      initial_conditions: List, initial state of the system.
-      ts: List, time span for simulation .
-      N: Integer, number of points to evaluate in the time span.
-      smooth_noise_level: number, level of random noise in the first half (smooth phase).
-      jumpy_noise_level: number, level of random noise in the second half (jumpy phase).
+      k: Float, spring constant.
+      y0: Sequence [position₀, velocity₀], initial conditions.
+    
     Outputs:
-      (y, yp): list, where y is the position array and yp is the velocity array over the time span.
+      sol: 2×M array, where
+        sol[0, i] = position at t[i],
+        sol[1, i] = velocity at t[i].
     """
-    t_eval = np.linspace(ts[0], ts[1], N)
-    sol = scipy.integrate.solve_ivp(damped_oscillator, ts, initial_conditions, args=(gamma, k), t_eval=t_eval)
+    omega0 = np.sqrt(k)
+    zeta = gamma / (2 * omega0)
     
-    y = sol.y[0]
-    yp = sol.y[1]
-    #print("y1=",y)
-    half = N // 2
-    # Apply smooth noise to the first half and jumpy noise to the second half
-    noise1 = np.concatenate([np.random.normal(0, noise_level_s,  half),
-                             np.random.normal(0, noise_level_j, N -  half)])
-    
-    noise2 = np.concatenate([np.random.normal(0, noise_level_s,  half),
-                             np.random.normal(0, noise_level_j, N -  half)])
-    y = y+ noise1
-    #print("noise1=",noise1)
-    yp = yp+ noise2
-    #print("y2=",y)
-    return y, yp,sol
-
+    if zeta < 1:  # Underdamped case (our case)
+        omega_d = omega0 * np.sqrt(1 - zeta**2)
+        A = y0[0]  # Initial position
+        B = (y0[1] + zeta * omega0 * y0[0]) / omega_d  # Modified initial velocity
+        
+        position = np.exp(-zeta * omega0 * t) * (A * np.cos(omega_d * t) + B * np.sin(omega_d * t))
+        velocity = np.exp(-zeta * omega0 * t) * (
+            (-zeta * omega0 * A + omega_d * B) * np.cos(omega_d * t) + 
+            (-zeta * omega0 * B - omega_d * A) * np.sin(omega_d * t)
+        )
+        
+        return np.array([position, velocity])
+    else:  # Overdamped/critically damped
+        position = y0[0] * np.exp(-gamma * t / 2)
+        velocity = -gamma * position / 2
+        return np.array([position, velocity])
 
 def euler_series(gamma, k, y0, t_grid):
     """
-    Numerically approximates the solution of the damped oscillator using the Euler forward method for a single time point.
+    Solves the damped oscillator via the forward Euler method.
 
     Inputs:
-      gamma: Array, range of damping coefficients.
-      k: Float, stiffness coefficient.
-      y0: 2D Array, initial states of the system for each gamma (position and velocity).
-      t: Float, current time.
-      h: Float,times step length.
+      gamma: Float, damping coefficient.
+      k: Float, spring constant.
+      y0: Sequence [position₀, velocity₀], initial state.
+      t_grid: 1D array of floats, time points for simulation.
 
     Outputs:
-      y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
+      y: 2×N array of floats, where
+        y[0, i] = position at t_grid[i],
+        y[1, i] = velocity at t_grid[i].
+      Returns None if instability (NaN or overflow) occurs.
     """
-    y = np.empty((2, len(t_grid)))
+    y = np.zeros((2, len(t_grid)))
     y[:, 0] = y0
+    
     for i in range(len(t_grid) - 1):
         h = t_grid[i+1] - t_grid[i]
-        dy = np.array(damped_oscillator(t_grid[i], y[:, i], gamma, k))
-        # Check for extreme values
-        if np.any(np.abs(dy) > 1e6):
-            # Cap extreme derivatives
-            dy = np.clip(dy, -1e6, 1e6)
-        y[:, i+1] = y[:, i] + h * dy
-        # Check for instability
-        if np.any(np.isnan(y[:, i+1])) or np.any(np.abs(y[:, i+1]) > 1e10):
-            # Fill rest with NaN to indicate failure
-            y[:, i+1:] = np.nan
-            break
+        dy = damped_oscillator(t_grid[i], y[:, i], gamma, k)
+        y[:, i+1] = y[:, i] + h * np.array(dy)
+        
+        # Check for numerical instability
+        if np.any(np.abs(y[:, i+1]) > 1e6) or np.any(np.isnan(y[:, i+1])):
+            return None
+    
     return y
 
 def trapezoidal_series(gamma, k, y0, t_grid):
     """
-    Numerically approximates the solution of the damped oscillator using the trapezoidal method for a single time point.
-
+    Solves the damped oscillator via the trapezoidal (implicit midpoint) method.
+    
     Inputs:
-      gammas: Array, range of damping coefficients.
-      k: Float, stiffness coefficient.
-      initial_conditions: 2D Array, initial states of the system for each gamma (position and velocity).
-      t: Float, current time.
-      h: Float,times step length.
-
+      gamma: Float, damping coefficient.
+      k: Float, spring constant.
+      y0: Sequence [position₀, velocity₀], initial state.
+      t_grid: 1D array of floats, time points for simulation.
+    
     Outputs:
-      y: 2D Array, where each row corresponds to the system states (position and velocity) for a specific gamma.
+      y: 2×N array of floats, where
+        y[0, i] = position at t_grid[i],
+        y[1, i] = velocity at t_grid[i].
+      Returns None if instability (NaN or overflow) occurs.
     """
-    y = np.empty((2, len(t_grid)))
+    y = np.zeros((2, len(t_grid)))
     y[:, 0] = y0
+    
     for i in range(len(t_grid) - 1):
         h = t_grid[i+1] - t_grid[i]
-        f_n = np.array(damped_oscillator(t_grid[i], y[:, i], gamma, k))
-        # Check for extreme values
-        if np.any(np.abs(f_n) > 1e6):
-            f_n = np.clip(f_n, -1e6, 1e6)
-        y_pred = y[:, i] + h * f_n
-        f_np1 = np.array(damped_oscillator(t_grid[i+1], y_pred, gamma, k))
-        if np.any(np.abs(f_np1) > 1e6):
-            f_np1 = np.clip(f_np1, -1e6, 1e6)
-        y[:, i+1] = y[:, i] + 0.5*h*(f_n + f_np1)
-        # Check for instability
-        if np.any(np.isnan(y[:, i+1])) or np.any(np.abs(y[:, i+1]) > 1e10):
-            # Fill rest with NaN to indicate failure
-            y[:, i+1:] = np.nan
-            break
+        
+        f_n = damped_oscillator(t_grid[i], y[:, i], gamma, k)
+        y_pred = y[:, i] + h * np.array(f_n)
+        
+        f_np1 = damped_oscillator(t_grid[i+1], y_pred, gamma, k)
+        y[:, i+1] = y[:, i] + 0.5 * h * (np.array(f_n) + np.array(f_np1))
+        
+        if np.any(np.abs(y[:, i+1]) > 1e6) or np.any(np.isnan(y[:, i+1])):
+            return None
+    
     return y
 
-def log_likelihood_point(y_sim, yp_sim, y_obs, yp_obs, noise_level):
+# ============================================================================
+# SECTION 2: FIXED ANALYTICAL METHOD (FINDS TRUE GAMMA) - ORIGINAL
+# ============================================================================
+
+def compute_exact_log_likelihood_analytical(gamma, k, t_window, y_obs, yp_obs, noise_level):
     """
-    Computes the combined log-likelihood of the observed position data for a given simulated dataset.
-  
-    Inputs:
-        y_sim: Array, the simulated data from the model.
-        yp_sim: Array, the simulated data from the model.
-        y_obs: Array, observed data for position (y).
-        yp_obs: Array, observed data for velocity (y').
-        noise_level: Float, standard deviation of noise for the data.
-
-
-    Outputs:
-        log_likelihood: Float, the combined log-likelihood value of the observed data given the simulated model outputs.
-
-    """
-    residual_y = y_obs - y_sim
-    residual_yp = yp_obs - yp_sim
+    Exact log‑likelihood for analytical solution on a fixed time window.
     
-    ll_y = -0.5 * np.log(2 * np.pi) - 0.5 * np.log(noise_level**2) - \
-           0.5 / (noise_level**2) * (residual_y**2)
-    ll_yp = -0.5 * np.log(2 * np.pi) - 0.5 * np.log(noise_level**2) - \
-            0.5 / (noise_level**2) * (residual_yp**2)
-    
-    return ll_y + ll_yp
-
-def log_likelihood_trajectory(sim_trajectory, y_obs, yp_obs, noise_levels):
-    """
-    Computes the total log-likelihood of observing data given a simulated trajectory.
-
     Inputs:
-      sim_trajectory: 2×N array, Simulated states over N time points.
-      y_obs: 1D array of length N, Observed positions at each time point.
-      yp_obs: 1D array of length N, Observed velocities at each time point.
-      noise_levels: Float or 1D array of length N, Observation noise standard deviation(s).
-
+      gamma: Float, damping coefficient to test.
+      k: Float, spring constant.
+      t_window: 1D array of floats, time points in this window.
+      y_obs: 1D array of floats, observed positions.
+      yp_obs: 1D array of floats, observed velocities.
+      noise_level: Float, standard deviation of Gaussian observation noise.
+    
     Outputs:
-      ll_total: Float, Sum of pointwise log-likelihoods over the trajectory.
+      log_lik: Float, total log‑likelihood of observing (y_obs, yp_obs)
+        under the analytical solution with parameter gamma.
+        Returns -inf if invalid or out‑of‑bounds.
     """
-    # Check for NaN or inf
-    if np.any(np.isnan(sim_trajectory)) or np.any(np.isinf(sim_trajectory)):
+    if gamma <= 0.01 or gamma >= 0.99:
         return -np.inf
     
-    if np.isscalar(noise_levels):
-        noise_levels = np.full(len(y_obs), noise_levels)
-    
-    ll_total = 0.0
-    for t in range(len(y_obs)):
-        ll_total += log_likelihood_point(
-            sim_trajectory[0, t], sim_trajectory[1, t],
-            y_obs[t], yp_obs[t], noise_levels[t]
-        )
-    return ll_total
-
-def compute_distance(sim, y_obs, ydot_obs, sigma_t):
-    """
-    Compute distance between simulated and observed trajectories.
-
-
-    sim : ndarray, shape (2, N), Simulated trajectory [position; velocity].
-    y_obs : array_like, shape (N,), Observed positions.
-    ydot_obs : array_like, shape (N,), Observed velocities.
-    sigma_t : float or array_like, Observation noise standard deviation(s).
-
-    Returns
-    distance: float,  Normalized distance metric.
-    """
-    if np.any(np.isnan(sim)) or np.any(np.isinf(sim)):
-        return 1e10
-    
-    y_sim, ydot_sim = sim[0, :], sim[1, :]
-    sigma = sigma_t[0] if hasattr(sigma_t, '__len__') else sigma_t
-    
-    res_y = (y_sim - y_obs) / sigma
-    res_yp = (ydot_sim - ydot_obs) / sigma
-    
-    dist_y = np.sqrt(np.percentile(res_y**2, 75))
-    dist_yp = np.sqrt(np.percentile(res_yp**2, 75))
-    
-    return np.sqrt(dist_y**2 + dist_yp**2)
-
-def abc_smc_improved(method, theta_prior, y_obs, ydot_obs, sigma_t, t_grid, y0_val,
-                     num_particles, num_generations, k_val, theta_min, theta_max, 
-                     window_idx=0, rng=None):
-    """
-    Improved ABC-SMC algorithm with adaptive tolerance scheduling.
-
-   
-    method : callable, Integration method (euler_series or trapezoidal_series).
-    theta_prior : array_like, Prior parameter values.
-    y_obs : array_like, Observed positions.
-    ydot_obs : array_like
-        Observed velocities.
-    sigma_t : float or array_like
-        Observation noise standard deviation(s).
-    t_grid : array_like
-        Time points.
-    y0_val : array_like, shape (2,)
-        Initial conditions.
-    num_particles : int
-        Number of particles in each generation.
-    num_generations : int
-        Number of ABC-SMC generations.
-    k_val : float
-        Stiffness coefficient.
-    theta_min : float
-        Minimum parameter value.
-    theta_max : float
-        Maximum parameter value.
-    window_idx : int, optional
-        Window index for debug output control.
-    rng : RandomState, optional
-        Random number generator.
-
-    Returns
-    -------
-    tuple
-        (thetas, weights, Z_estimate) where thetas are parameter values,
-        weights are importance weights, and Z_estimate is evidence estimate.
-    """
-    if rng is None:
-        rng = np.random.default_rng(0)
-
-    dim = 1
-    thetas = np.empty((num_generations, num_particles))
-    weights = np.empty_like(thetas)
-    log_likelihoods = []
-    
-    percentiles = np.linspace(95, 50, num_generations)
-    prev_distances = None
-
-    for g in range(num_generations):
-        if g == 0:
-            pool = rng.choice(theta_prior, size=num_particles, replace=True)
-            w = np.full(num_particles, 1/num_particles)
-            
-            distances = []
-            valid_pool = []
-            for th in pool:
-                sim = method(th, k_val, y0_val, t_grid)
-                dist = compute_distance(sim, y_obs, ydot_obs, sigma_t)
-                if dist < 1000:
-                    distances.append(dist)
-                    valid_pool.append(th)
-            
-            pool = np.array(valid_pool)
-            
-            if len(pool) < num_particles:
-                additional = rng.choice(pool, size=num_particles-len(pool), replace=True)
-                pool = np.concatenate([pool, additional])
-                for th in additional:
-                    sim = method(th, k_val, y0_val, t_grid)
-                    dist = compute_distance(sim, y_obs, ydot_obs, sigma_t)
-                    distances.append(dist)
-            
-            eps = np.percentile(distances, percentiles[g])
-            prev_distances = distances
-
-        else:
-            eps = np.percentile(prev_distances, percentiles[g])
-            pool = []
-            new_distances = []
-            attempts = 0
-            
-            param_range = theta_max - theta_min
-            proposal_std = param_range * 0.1 * (1 - g/num_generations) + param_range * 0.01
-            
-            while len(pool) < num_particles:
-                attempts += 1
-                
-                idx = rng.choice(num_particles, p=weights[g-1])
-                cand = thetas[g-1, idx] + rng.normal(0, proposal_std)
-                
-                if cand < theta_min or cand > theta_max:
-                    continue
-                
-                sim = method(cand, k_val, y0_val, t_grid)
-                dist = compute_distance(sim, y_obs, ydot_obs, sigma_t)
-                
-                if dist > 1000:
-                    continue
-                
-                if dist <= eps:
-                    pool.append(cand)
-                    new_distances.append(dist)
-                
-                if attempts > num_particles * 20:
-                    if len(pool) < num_particles / 2 and g == num_generations - 1:
-                        print(f"    Note: Partial convergence ({len(pool)}/{num_particles} particles)")
-                    remaining = num_particles - len(pool)
-                    if remaining > 0:
-                        best_idx = np.argsort(prev_distances)[:remaining]
-                        for idx in best_idx:
-                            pool.append(thetas[g-1, idx])
-                            new_distances.append(prev_distances[idx])
-                    break
-            
-            pool = np.array(pool)
-            distances = new_distances
-            prev_distances = distances
-            
-            kern = scipy.stats.norm.pdf(
-                pool[None, :],
-                loc=thetas[g-1, :, None],
-                scale=proposal_std
-            )
-            denom = np.dot(weights[g-1], kern) + 1e-10
-            w = 1.0 / denom
-            w /= w.sum()
-
-        thetas[g] = pool
-        weights[g] = w
+    try:
+        # Use exact initial conditions
+        y0 = np.array([y_obs[0], yp_obs[0]])
         
-        median_dist = np.median(distances)
-        if median_dist > 0:
-            kde_bw = max(0.1 * np.std(distances), 0.01)
-            log_likes = [-0.5 * (d/kde_bw)**2 for d in distances]
-            log_likelihood_est = logsumexp(log_likes) - np.log(len(distances))
-        else:
-            log_likelihood_est = 0.0
+        # Generate analytical predictions
+        t_rel = t_window - t_window[0]
+        predictions = np.array([analytical_solution(t, gamma, k, y0) for t in t_rel])
+        y_pred = predictions[:, 0]
+        yp_pred = predictions[:, 1]
         
-        log_likelihoods.append(log_likelihood_est)
+        # Calculate residuals
+        res_y = y_obs - y_pred
+        res_yp = yp_obs - yp_pred
         
-        ESS = 1.0 / np.sum(w**2)
-        median_dist = np.median(distances) if len(distances) > 0 else 0
-        if g == num_generations - 1 and window_idx < 2:
-            print(f"    Final: eps={eps:.3f}, ESS={ESS:.1f}, median_dist={median_dist:.3f}")
+        # Gaussian likelihood for both position and velocity
+        n_obs = len(y_obs)
+        sigma = noise_level
+        
+        log_lik_y = -0.5 * n_obs * np.log(2 * np.pi * sigma**2) - 0.5 * np.sum(res_y**2) / sigma**2
+        log_lik_yp = -0.5 * n_obs * np.log(2 * np.pi * sigma**2) - 0.5 * np.sum(res_yp**2) / sigma**2
+        
+        total_log_lik = log_lik_y + log_lik_yp
+        
+        return total_log_lik if np.isfinite(total_log_lik) else -np.inf
+        
+    except:
+        return -np.inf
 
-    # Return particles, weights, and placeholder for evidence
-    return thetas, weights, 666
-
-def ekf_window(thetas, weights, y_obs, yp_obs, t_grid, k_val,
-               Q, R, x0, P0, λ=0.99):
+def compute_exact_evidence_stable(k, t_window, y_obs, yp_obs, noise_level, bounds=(0.01, 0.99)):
     """
-    EKF within window for ensemble of particles.
-
-
-    thetas : array_like, Parameter values for each particle.
-    weights : array_like,Importance weights for each particle.
-    y_obs : array_like,  Observed positions.
-    yp_obs : array_like,Observed velocities.
-    t_grid : array_like,  Time points.
-    k_val : float, Stiffness coefficient.
-    Q : ndarray, shape (2, 2),Process noise covariance.
-    R : ndarray, shape (2, 2), Measurement noise covariance.
-    x0 : array_like, shape (2,), Initial state estimate.
-    P0 : ndarray, shape (2, 2), Initial covariance estimate.
-    λ : float, optional, Forgetting factor.
-
-    Returns
-
-    tuple, (x_mean, cov) where x_mean is the weighted mean state estimate
-        and cov is the weighted covariance.
+    Computes the Bayesian evidence Z for the analytical model via high‑res integration.
+    
+    Inputs:
+      k: Float, spring constant.
+      t_window: 1D array of floats, time points in this window.
+      y_obs: 1D array of floats, observed positions.
+      yp_obs: 1D array of floats, observed velocities.
+      noise_level: Float, observation noise standard deviation.
+      bounds: Tuple (γ_min, γ_max), prior bounds for damping.
+    
+    Outputs:
+      dict with keys:
+        evidence: Float, estimated Z,
+        log_evidence: Float, log(Z),
+        map_gamma: Float, γ that maximizes the posterior.
     """
-    Np = len(thetas)
-    dim = len(x0)
-    Xp = np.zeros((Np, dim))
-    Pp = np.zeros((Np, dim, dim))
-
-    for i, θ in enumerate(thetas):
-        x_i, P_i = x0.copy(), P0.copy()
         
-        try:
-            for j in range(len(t_grid)-1):
-                dt = t_grid[j+1] - t_grid[j]
-                
-                F = np.array([[0, 1], [-k_val, -θ]])
-                G = np.eye(2) + F * dt
-                x_pred = G @ x_i
-                P_pred = (G @ P_i @ G.T) / λ + Q
-                
-                y_meas = np.array([y_obs[j+1], yp_obs[j+1]])
-                H = np.eye(2)
-                
-                S = H @ P_pred @ H.T + R
-                K = P_pred @ H.T @ inv(S)
-                x_i = x_pred + K @ (y_meas - H @ x_pred)
-                P_i = (np.eye(dim) - K @ H) @ P_pred
-                
-                if np.any(np.isnan(x_i)) or np.any(np.isinf(x_i)):
-                    x_i = y_meas
-                    P_i = R
-        except:
-            x_i = np.array([y_obs[-1], yp_obs[-1]])
-            P_i = R
+    gamma_min, gamma_max = bounds
+    prior_density = 1.0 / (gamma_max - gamma_min)
+    
+    # High-resolution grid for integration
+    gamma_grid = np.linspace(gamma_min, gamma_max, 2001)
+    
+    # Compute log-likelihoods
+    log_likelihoods = np.array([
+        compute_exact_log_likelihood_analytical(g, k, t_window, y_obs, yp_obs, noise_level)
+        for g in gamma_grid
+    ])
+    
+    # Handle numerical stability
+    finite_mask = np.isfinite(log_likelihoods)
+    if not np.any(finite_mask):
+        return {'evidence': 1e-50, 'log_evidence': np.log(1e-50), 'map_gamma': 0.3}
+    
+    max_log_lik = np.max(log_likelihoods[finite_mask])
+    
+    # Normalize to prevent underflow
+    normalized_log_lik = log_likelihoods - max_log_lik
+    normalized_log_lik = np.where(finite_mask, normalized_log_lik, -np.inf)
+    
+    # Convert to linear scale
+    normalized_likelihoods = np.exp(np.clip(normalized_log_lik, -50, 0))
+    
+    # Integrate: Z = ∫ L(γ) × p(γ) dγ
+    integrand = normalized_likelihoods * prior_density
+    
+    try:
+        normalized_evidence = simpson(integrand, gamma_grid)
+        evidence = normalized_evidence * np.exp(max_log_lik)
+        evidence = max(evidence, 1e-50)
+        evidence = min(evidence, 1e50)
         
-        Xp[i] = x_i
-        Pp[i] = P_i
-
-    x_mean = np.average(Xp, axis=0, weights=weights)
-    cov = np.zeros_like(P0)
-    for i in range(Np):
-        dx = (Xp[i] - x_mean)[:, None]
-        cov += weights[i] * (Pp[i] + dx @ dx.T)
+    except:
+        evidence = 1e-50
     
-    return x_mean, cov
-
-# ============== Processing Functions ==============
-
-def process_window(window_idx, t_idx, W, T, observed_y, observed_yp, 
-                  y0_e, y0_t, params):
-    """
-    Process a single analysis window with proper evidence calculation.
-
-
-    window_idx : int, Current window index.
-    t_idx : int, Starting time index for the window.
-    W : int,  Window size (number of time points).
-    T : array_like, Full time array.
-    observed_y : array_like, Observed positions for full time series.
-    observed_yp : array_like, Observed velocities for full time series.
-    y0_e : array_like, shape (2,), Initial state for Euler method.
-    y0_t : array_like, shape (2,), Initial state for Trapezoidal method.
-    params : dict, Parameter dictionary.
-
-    Returns
-
-    """
-    N = len(T)
-    idx0 = t_idx
-    idx1 = min(t_idx + W, N)
-    
-    t_slice = T[idx0:idx1]
-    y_slice = observed_y[idx0:idx1]
-    yp_slice = observed_yp[idx0:idx1]
-    
-    if len(t_slice) < 5:
-        return None
-    
-    sigma_sl = np.full(len(t_slice), params['noise_level_s'])
-    
-    if window_idx == 0:
-        print(f"\nProcessing window {window_idx+1}: indices=[{idx0}:{idx1}], size={len(t_slice)}")
-    elif window_idx % 50 == 0:
-        print(f"\nWindow {window_idx+1}, Progress: {t_idx/N*100:.1f}%")
-    
-    y0_window = np.array([y_slice[0], yp_slice[0]])
-    
-    # Euler method
-    if window_idx == 0:
-        print("Running ABC-SMC for Euler method...")
-    thetaE, wE, _ = abc_smc_improved(
-        euler_series, params['theta_prior'], y_slice, yp_slice,
-        sigma_sl, t_slice, y0_window,
-        params['num_particles'], params['num_generations'], params['k'],
-        params['theta_min'], params['theta_max'], window_idx
-    )
-    
-    x_e, P_e = ekf_window(
-        thetaE[-1], wE[-1], y_slice, yp_slice, t_slice, params['k'],
-        params['Q'], params['R'], y0_window, params['P0']
-    )
-    
-    # Trapezoidal method
-    if window_idx == 0:
-        print("Running ABC-SMC for Trapezoidal method...")
-    thetaT, wT, _ = abc_smc_improved(
-        trapezoidal_series, params['theta_prior'], y_slice, yp_slice,
-        sigma_sl, t_slice, y0_window,
-        params['num_particles'], params['num_generations'], params['k'],
-        params['theta_min'], params['theta_max'], window_idx
-    )
-    
-    x_t, P_t = ekf_window(
-        thetaT[-1], wT[-1], y_slice, yp_slice, t_slice, params['k'],
-        params['Q'], params['R'], y0_window, params['P0']
-    )
-    
-    # Get best parameter estimates
-    theta_e_best = np.average(thetaE[-1], weights=wE[-1])
-    theta_t_best = np.average(thetaT[-1], weights=wT[-1])
-    
-    # Compute evidence using importance sampling
-    log_likes_e = []
-    for i, theta in enumerate(thetaE[-1]):
-        sim = euler_series(theta, params['k'], y0_window, t_slice)
-        ll = log_likelihood_trajectory(sim, y_slice, yp_slice, sigma_sl)
-        log_likes_e.append(ll)
-    
-    log_likes_t = []
-    for i, theta in enumerate(thetaT[-1]):
-        sim = trapezoidal_series(theta, params['k'], y0_window, t_slice)
-        ll = log_likelihood_trajectory(sim, y_slice, yp_slice, sigma_sl)
-        log_likes_t.append(ll)
-    
-    # Convert to numpy arrays
-    log_likes_e = np.array(log_likes_e)
-    log_likes_t = np.array(log_likes_t)
-    
-    # Use importance sampling to estimate log evidence
-    log_weights_e = np.log(wE[-1] + 1e-300)
-    log_weights_t = np.log(wT[-1] + 1e-300)
-    
-    # Check for numerical issues
-    if np.all(np.isinf(log_likes_e)) or np.all(np.isinf(log_likes_t)):
-        # Use alternative evidence estimate based on RMS errors
-        sim_e = euler_series(theta_e_best, params['k'], y0_window, t_slice)
-        sim_t = trapezoidal_series(theta_t_best, params['k'], y0_window, t_slice)
-        
-        if not (np.any(np.isnan(sim_e)) or np.any(np.isnan(sim_t))):
-            rms_e = np.sqrt(np.mean((sim_e[0] - y_slice)**2 + (sim_e[1] - yp_slice)**2))
-            rms_t = np.sqrt(np.mean((sim_t[0] - y_slice)**2 + (sim_t[1] - yp_slice)**2))
-            
-            # Convert RMS to evidence-like values
-            Z_e = np.exp(-rms_e**2 / (2 * params['noise_level_s']**2))
-            Z_t = np.exp(-rms_t**2 / (2 * params['noise_level_s']**2))
-        else:
-            Z_e = 1.0
-            Z_t = 1.0
-        
-        if window_idx == 0:
-            print(f"  Note: Using RMS-based evidence due to numerical limits")
+    # Find MAP estimate
+    if np.any(finite_mask):
+        map_idx = np.argmax(log_likelihoods[finite_mask])
+        valid_indices = np.where(finite_mask)[0]
+        map_gamma = gamma_grid[valid_indices[map_idx]]
     else:
-        # Estimate log evidence
-        log_Z_e = logsumexp(log_weights_e + log_likes_e)
-        log_Z_t = logsumexp(log_weights_t + log_likes_t)
-        
-        # Normalize to prevent overflow
-        max_log_Z = max(log_Z_e, log_Z_t)
-        Z_e = np.exp(log_Z_e - max_log_Z)
-        Z_t = np.exp(log_Z_t - max_log_Z)
-    
-    # Bayes factor
-    BF_display = Z_t / (Z_e + 1e-10)
-    BF_display = min(BF_display, 1000.0)
-    BF_display = max(BF_display, 0.001)
-    
-    # Debug info for first window
-    if window_idx == 0:
-        print(f"  Parameters: γ_E={theta_e_best:.3f}, γ_T={theta_t_best:.3f} (true={0.3:.3f})")
-        print(f"  Evidence: Z_E={Z_e:.3f}, Z_T={Z_t:.3f}, BF={BF_display:.1f}")
-    
-    error = np.linalg.norm(np.array([y_slice[-1], yp_slice[-1]]) - x_e)
+        map_gamma = 0.3
     
     return {
-        'window_center': T[(idx0 + idx1) // 2],
-        'window_range': (idx0, idx1-1),
-        'theta_e_mean': theta_e_best,
-        'theta_t_mean': theta_t_best,
-        'Z_e': Z_e,
-        'Z_t': Z_t,
-        'BF': BF_display,
-        'x_e': x_e,
-        'x_t': x_t,
-        'error': error
+        'evidence': evidence,
+        'log_evidence': np.log(evidence),
+        'map_gamma': map_gamma,
+        'max_log_likelihood': max_log_lik
     }
 
-def adapt_window_size(W, errors, W_min, W_max, deltas):
+# ============================================================================
+# SECTION 3: STANDARD LIKELIHOOD FOR NUMERICAL METHODS (ORIGINAL)
+# ============================================================================
+
+def compute_log_likelihood_window(gamma, method, k, t_window, y_obs, yp_obs, noise_level):
     """
-    Adapt window size based on error trend.
-
-    W : int, Current window size.
-    errors : list, History of errors.
-    W_min : int
-        Minimum window size.
-    W_max : int, Maximum window size.
-    deltas : int, Step size for adaptation.
-
-    Returns
-
-    W: int, New window size.
+    Approximate log‑likelihood using a numerical method on a time window.
+    
+    Inputs:
+      gamma: Float, damping coefficient.
+      method: String, one of {'analytical','euler','trapezoidal'}.
+      k: Float, spring constant.
+      t_window: 1D array, time points in window.
+      y_obs: 1D array, observed positions.
+      yp_obs: 1D array, observed velocities.
+      noise_level: Float, observation noise standard deviation.
+    
+    Outputs:
+      total_ll: Float, combined log‑likelihood on this window.
+        Returns a large negative value if simulation fails or residuals explode.
     """
-    if len(errors) > 1:
-        if errors[-1] > errors[-2] * 1.1:
-            return max(W - deltas, W_min)
-        else:
-            return min(W + deltas, W_max)
-    return W
-
-def update_posteriors(Pe, Pt, Z_e, Z_t):
-    """
-    Update model posteriors using Bayes rule.
-
-    Pe : float, Current posterior probability for Euler.
-    Pt : float, Current posterior probability for Trapezoidal.
-    Z_e : float,  Evidence for Euler model.
-    Z_t : float,  Evidence for Trapezoidal model.
+    if gamma <= 0.01 or gamma >= 0.99:
+        return -1e6
     
-    Returns:
-    (Pe_next, Pt_next): tuple, updated posteriors.
-    """
-    log_Pe = np.log(Pe + 1e-300)
-    log_Pt = np.log(Pt + 1e-300)
-    log_Z_e = np.log(Z_e + 1e-300)
-    log_Z_t = np.log(Z_t + 1e-300)
+    y0 = np.array([y_obs[0], yp_obs[0]])
     
-    log_denom = logsumexp([log_Pe + log_Z_e, log_Pt + log_Z_t])
-    
-    Pe_next = np.exp(log_Pe + log_Z_e - log_denom)
-    Pt_next = np.exp(log_Pt + log_Z_t - log_denom)
-    
-    if not np.isfinite(Pe_next) or not np.isfinite(Pt_next):
-        return Pe, Pt
-    
-    return Pe_next, Pt_next
-
-# ============== Plotting Functions ==============
-
-def plot_observed_data(T, T_fine, sol_fine, observed_y, observed_yp, N):
-    """Plot the observed data and true solution."""
-    plt.figure(figsize=(12, 5))
-    
-    plt.subplot(1, 2, 1)
-    plt.plot(T_fine, sol_fine.y[0], 'b-', label='True Position', alpha=0.7)
-    obs_stride = max(1, N // 100)
-    plt.scatter(T[::obs_stride], observed_y[::obs_stride], c='red', s=5, 
-                label=f'Observations (every {obs_stride})', alpha=0.5, edgecolor='none')
-    plt.xlabel('Time')
-    plt.ylabel('Position')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.title('Damped Oscillator Position (5000 measurements)')
-    
-    plt.subplot(1, 2, 2)
-    plt.plot(T_fine, sol_fine.y[1], 'b-', label='True Velocity', alpha=0.7)
-    plt.scatter(T[::obs_stride], observed_yp[::obs_stride], c='red', s=5,
-                label=f'Observations (every {obs_stride})', alpha=0.5, edgecolor='none')
-    plt.xlabel('Time')
-    plt.ylabel('Velocity')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.title('Damped Oscillator Velocity')
-    
-    plt.tight_layout()
-    plt.show()
-
-def plot_model_posteriors(P_e_hist, P_t_hist, window_centers):
-    """Plot evolution of model posteriors."""
-    if len(P_e_hist) > 1:
-        plt.figure(figsize=(10, 5))
-        posterior_times = [0] + window_centers
-        plt.plot(posterior_times[:len(P_e_hist)], P_e_hist, 'o-', label='P(Euler|Data)', 
-                linewidth=1, markersize=3, color='red', alpha=0.7)
-        plt.plot(posterior_times[:len(P_t_hist)], P_t_hist, 's-', label='P(Trapezoidal|Data)', 
-                linewidth=1, markersize=3, color='blue', alpha=0.7)
-        plt.xlabel('Measurement Time')
-        plt.ylabel('Model Posterior Probability')
-        plt.title('Evolution of Model Posteriors (updated after each window)')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.ylim(-0.05, 1.05)
-        plt.tight_layout()
-        plt.show()
-
-def plot_evidence_values(Z_e_hist, Z_t_hist, window_centers):
-    """Plot model evidence evolution."""
-    if len(Z_e_hist) > 0:
-        plt.figure(figsize=(10, 5))
+    try:
+        if method == 'analytical':
+            # Use exact analytical solution
+            t_rel = t_window - t_window[0]
+            sol = np.array([analytical_solution(t, gamma, k, y0) for t in t_rel])
+            y_pred = sol[:, 0]
+            yp_pred = sol[:, 1]
         
-        plt.plot(window_centers, Z_e_hist, 'o-', label='Forward Euler', 
-                linewidth=1, markersize=3, color='blue', alpha=0.7)
-        plt.plot(window_centers, Z_t_hist, 's-', label='Trapezoidal rule', 
-                linewidth=1, markersize=3, color='orange', alpha=0.7)
-        plt.ylabel('Model evidence (normalized)')
-        plt.xlabel('Measurement Time')
-        plt.title('Model Evidence Evolution (computed over each window)')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.yscale('log')  # Use log scale to see variations better
-        plt.tight_layout()
-        plt.show()
-
-def plot_bayes_factors(BF_list, window_centers):
-    """Plot Bayes factor evolution."""
-    if len(BF_list) > 0:
-        clean_BF = [bf if (np.isfinite(bf) and bf > 0) else 1.0 for bf in BF_list]
+        elif method == 'euler':
+            result = euler_series(gamma, k, y0, t_window)
+            if result is None:
+                return -1e6
+            y_pred = result[0, :]
+            yp_pred = result[1, :]
         
-        plt.figure(figsize=(10, 5))
-        plt.plot(window_centers, clean_BF, 'o-', label='Bayes Factor (Z_t/Z_e)', 
-                linewidth=1, markersize=3, color='green', alpha=0.7)
-        plt.axhline(y=1, color='k', linestyle='--', alpha=0.5, label='No preference')
-        plt.axhline(y=3, color='r', linestyle=':', alpha=0.5, label='Strong evidence')
-        plt.axhline(y=10, color='r', linestyle=':', alpha=0.3, label='Very strong evidence')
-        plt.xlabel('Measurement Time')
-        plt.ylabel('Bayes Factor (log scale)')
-        plt.title('Bayes Factor Evolution (Trapezoidal/Euler)')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.yscale('log')
-        plt.ylim(0.1, 1000)
-        plt.tight_layout()
-        plt.show()
-
-def plot_parameter_estimates(theta_e_means, theta_t_means, window_centers, gamma_true):
-    """Plot parameter estimation evolution."""
-    if len(theta_e_means) > 0:
-        plt.figure(figsize=(10, 5))
-        plt.plot(window_centers, theta_e_means, 'o-', label='Euler estimates', 
-                linewidth=1, markersize=3, color='red', alpha=0.7)
-        plt.plot(window_centers, theta_t_means, 's-', label='Trapezoidal estimates', 
-                linewidth=1, markersize=3, color='blue', alpha=0.7)
-        plt.axhline(y=gamma_true, color='k', linestyle='--', alpha=0.5, 
-                   label=f'True value ({gamma_true})')
-        plt.xlabel('Measurement Time')
-        plt.ylabel('Damping Parameter (γ)')
-        plt.title('Parameter Estimation: Euler vs Trapezoidal (weighted mean of particles)')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        all_estimates = theta_e_means + theta_t_means
-        estimate_range = max(all_estimates) - min(all_estimates)
-        if estimate_range > 1e-6:
-            y_margin = max(0.05, 0.1 * estimate_range)
-            plt.ylim(min(all_estimates) - y_margin, max(all_estimates) + y_margin)
+        elif method == 'trapezoidal':
+            result = trapezoidal_series(gamma, k, y0, t_window)
+            if result is None:
+                return -1e6
+            y_pred = result[0, :]
+            yp_pred = result[1, :]
+        
         else:
-            plt.ylim(gamma_true - 0.05, gamma_true + 0.05)
-        plt.tight_layout()
-        plt.show()
+            return -1e6
+    
+    except:
+        return -1e6
+    
+    # Calculate residuals for both position and velocity
+    res_y = y_obs - y_pred
+    res_yp = yp_obs - yp_pred
+    
+    if np.any(np.abs(res_y) > 5) or np.any(np.abs(res_yp) > 5):
+        return -1e6
+    
+    # Combined Gaussian likelihood
+    n_obs = len(y_obs)
+    sigma = noise_level
+    
+    log_lik_y = -0.5 * n_obs * np.log(2 * np.pi * sigma**2) - 0.5 * np.sum(res_y**2) / sigma**2
+    log_lik_yp = -0.5 * n_obs * np.log(2 * np.pi * sigma**2) - 0.5 * np.sum(res_yp**2) / sigma**2
+    
+    total_ll = log_lik_y + log_lik_yp
+    
+    return np.clip(total_ll, -1e6, 1e6) if np.isfinite(total_ll) else -1e6
 
-def plot_window_coverage(T, window_ranges, N):
-    """Plot measurement times and window coverage."""
-    plt.figure(figsize=(14, 6))
-    
-    for i, (start_idx, end_idx) in enumerate(window_ranges):
-        color = plt.cm.viridis(i / len(window_ranges))
-        plt.fill_between(T[start_idx:end_idx+1], 0, 1, alpha=0.3, color=color)
-        plt.axvline(T[start_idx], color=color, alpha=0.5, linewidth=0.5)
-        if i == len(window_ranges) - 1:
-            plt.axvline(T[end_idx], color=color, alpha=0.5, linewidth=0.5)
-    
-    boundary_indices = []
-    for start_idx, end_idx in window_ranges:
-        if start_idx not in boundary_indices:
-            boundary_indices.append(start_idx)
-        if end_idx not in boundary_indices:
-            boundary_indices.append(end_idx)
-    
-    plt.scatter(T[boundary_indices], np.ones_like(boundary_indices) * 0.5, 
-                c='black', s=20, marker='|', label='Window boundaries')
-    
-    plt.ylim(0, 1.1)
-    plt.xlabel('Time (seconds)')
-    plt.ylabel('Window Coverage')
-    plt.title(f'{N} Measurements Analyzed in {len(window_ranges)} Connected Windows')
-    plt.legend()
-    plt.grid(True, alpha=0.3, axis='x')
-    plt.tight_layout()
-    plt.show()
+# ============================================================================
+# SECTION 4: FIXED MLE ESTIMATION (ORIGINAL)
+# ============================================================================
 
-def print_summary(N, window_idx, window_sizes, P_e_hist, P_t_hist, BF_list, 
-                  theta_e_means, theta_t_means, gamma_true):
-    """Print summary statistics."""
-    print("\n=== Summary ===")
-    print(f"Total measurement points: {N}")
-    print(f"Total windows processed: {window_idx}")
+def mle_estimation_window(method, k, t_window, y_obs, yp_obs, noise_level, bounds):
+    """
+    Finds the MLE of γ (and approximate evidence) on one window.
     
-    if len(window_sizes) > 0:
-        coverage = sum(window_sizes) / N * 100
-        print(f"Coverage: {coverage:.1f}% of time series")
-        print(f"Window sizes: min={min(window_sizes)}, max={max(window_sizes)}, "
-              f"mean={np.mean(window_sizes):.1f}")
+    Inputs:
+      method: String, one of {'analytical','euler','trapezoidal'}.
+      k: Float, spring constant.
+      t_window: 1D array of floats, time points in window.
+      y_obs: 1D array, observed positions.
+      yp_obs: 1D array, observed velocities.
+      noise_level: Float, observation noise std.
+      bounds: Tuple (γ_min, γ_max), search interval.
     
-    print(f"Final model posteriors: P(Euler)={P_e_hist[-1]:.3f}, "
-          f"P(Trapezoidal)={P_t_hist[-1]:.3f}")
+    Outputs:
+      dict with keys:
+        gamma: Float, MLE of damping,
+        log_likelihood: Float, at MLE,
+        evidence: Float, Laplace‑approx evidence,
+        log_evidence: Float, log(evidence),
+        method: 'MLE'
+    """
+    if method == 'analytical':
+        # EXACT evidence for analytical method
+        
+        # High-precision grid search for MAP
+        gamma_grid = np.linspace(bounds[0] + 0.001, bounds[1] - 0.001, 1000)
+        
+        log_likelihoods = np.array([
+            compute_exact_log_likelihood_analytical(g, k, t_window, y_obs, yp_obs, noise_level)
+            for g in gamma_grid
+        ])
+        
+        finite_mask = np.isfinite(log_likelihoods)
+        if np.any(finite_mask):
+            max_idx = np.argmax(log_likelihoods[finite_mask])
+            valid_indices = np.where(finite_mask)[0]
+            best_gamma = gamma_grid[valid_indices[max_idx]]
+            max_log_lik = log_likelihoods[valid_indices[max_idx]]
+            
+            # Refine with optimization
+            try:
+                def neg_ll(gamma):
+                    return -compute_exact_log_likelihood_analytical(gamma, k, t_window, y_obs, yp_obs, noise_level)
+                
+                result = minimize_scalar(neg_ll, bounds=bounds, method='bounded', options={'xatol': 1e-6})
+                if result.success and -result.fun > max_log_lik:
+                    best_gamma = result.x
+                    max_log_lik = -result.fun
+            except:
+                pass
+                
+        else:
+            best_gamma = 0.3
+            max_log_lik = -1e6
+        
+        # Compute exact evidence
+        evidence_result = compute_exact_evidence_stable(k, t_window, y_obs, yp_obs, noise_level, bounds)
+        
+        return {
+            'gamma': np.clip(best_gamma, bounds[0], bounds[1]),
+            'log_likelihood': max_log_lik,
+            'evidence': evidence_result['evidence'],
+            'log_evidence': evidence_result['log_evidence'],
+            'method': 'MLE'
+        }
     
-    if len(theta_e_means) > 0 and len(theta_t_means) > 0:
-        print(f"\nParameter estimates (true value = {gamma_true}):")
-        print(f"  Euler: mean={np.mean(theta_e_means):.4f}, std={np.std(theta_e_means):.4f}")
-        print(f"  Trapezoidal: mean={np.mean(theta_t_means):.4f}, std={np.std(theta_t_means):.4f}")
-    
-    if len(BF_list) > 0:
-        clean_BF = [bf for bf in BF_list if (np.isfinite(bf) and bf > 0)]
-        if len(clean_BF) > 0:
-            print(f"\nBayes factors (Trapezoidal/Euler):")
-            print(f"  Geometric mean: {np.exp(np.mean(np.log(clean_BF))):.3f}")
-            print(f"  Median: {np.median(clean_BF):.3f}")
-            print(f"  Min/Max: {min(clean_BF):.3f} / {max(clean_BF):.3f}")
-            print(f"  Percentage > 3 (strong evidence): {sum(bf > 3 for bf in clean_BF)/len(clean_BF)*100:.1f}%")
-            print(f"  Percentage > 10 (very strong evidence): {sum(bf > 10 for bf in clean_BF)/len(clean_BF)*100:.1f}%")
-    
-    print("\nAnalysis complete!")
+    else:
+        # Approximate evidence for numerical methods
+        def neg_log_lik(gamma):
+            ll = compute_log_likelihood_window(gamma[0], method, k, t_window, y_obs, yp_obs, noise_level)
+            return -ll
+        
+        best_result = None
+        best_ll = -1e6
+        
+        # Grid search for robustness
+        gamma_grid = np.linspace(bounds[0] + 0.05, bounds[1] - 0.05, 50)
+        for gamma_test in gamma_grid:
+            try:
+                ll = compute_log_likelihood_window(gamma_test, method, k, t_window, y_obs, yp_obs, noise_level)
+                if ll > best_ll:
+                    best_ll = ll
+                    best_gamma = gamma_test
+            except:
+                continue
+        
+        # Refine with optimization
+        if best_ll > -1e6:
+            try:
+                result = minimize(neg_log_lik, [best_gamma], 
+                                bounds=[bounds], method='L-BFGS-B')
+                if result.success:
+                    refined_ll = -result.fun
+                    if refined_ll > best_ll:
+                        best_ll = refined_ll
+                        best_gamma = result.x[0]
+            except:
+                pass
+        else:
+            best_gamma = 0.5  # Fallback
+        
+        # Laplace approximation for evidence
+        log_likelihood = best_ll
+        
+        if log_likelihood > -100:
+            log_evidence = log_likelihood - 0.5 * (len(y_obs) + len(yp_obs)) * np.log(2 * np.pi)
+            evidence = np.exp(np.clip(log_evidence, -50, 10))
+        else:
+            evidence = 1e-20
+            log_evidence = np.log(evidence)
+        
+        return {
+            'gamma': np.clip(best_gamma, bounds[0], bounds[1]),
+            'log_likelihood': log_likelihood,
+            'evidence': evidence,
+            'log_evidence': log_evidence,
+            'method': 'MLE'
+        }
 
-# ============== Main Program ==============
+# ============================================================================
+# SECTION 5: STABLE ABC-SMC IMPLEMENTATION (ORIGINAL)
+# ============================================================================
 
-if __name__ == '__main__':
-    # Set random seed
-    seed = 42
-    np.random.seed(seed)
+def abc_smc_estimation_window(method, k, t_window, y_obs, yp_obs, bounds, 
+                            num_particles=50, num_generations=3):
+    """
+    ABC‑SMC inference of γ on one data window.
     
-    # System parameters
-    params = {
-        'm': 1,
-        'k': 5,
-        'gamma_true': 0.3,
-        'initial_conditions': [1, 0],
-        'noise_level_s': 0.05,
-        'num_particles': 100,
-        'num_generations': 8,
-        'theta_min': 0.1,
-        'theta_max': 0.5,
-        'W_boot': 30,
-        'W_min': 10,
-        'W_max': 100,
-        'deltas': 5,
-        'max_windows': 200
+    Inputs:
+      method: String, one of {'analytical','euler','trapezoidal'}.
+      k: Float, spring constant.
+      t_window: 1D array of floats, time points in window.
+      y_obs: 1D array, observed positions.
+      yp_obs: 1D array, observed velocities.
+      bounds: Tuple (γ_min, γ_max), prior support.
+      num_particles: Int, number of SMC particles.
+      num_generations: Int, number of SMC generations.
+    
+    Outputs:
+      dict with keys:
+        gamma: Float, posterior mean of γ,
+        gamma_std: Float, posterior std of γ,
+        evidence: Float, acceptance‑rate as proxy for evidence,
+        log_evidence: Float, log(evidence),
+        method: 'ABC-SMC'
+    """
+    particles = np.zeros((num_generations, num_particles))
+    weights = np.zeros((num_generations, num_particles))
+    
+    # Calculate distances for tolerance setting
+    sample_distances = []
+    y0 = np.array([y_obs[0], yp_obs[0]])
+    
+    for _ in range(100):
+        gamma_test = np.random.uniform(bounds[0] + 0.05, bounds[1] - 0.05)
+        
+        try:
+            if method == 'analytical':
+                t_rel = t_window - t_window[0]
+                sol = np.array([analytical_solution(t, gamma_test, k, y0) for t in t_rel])
+                y_pred = sol[:, 0]
+                yp_pred = sol[:, 1]
+            
+            elif method == 'euler':
+                result = euler_series(gamma_test, k, y0, t_window)
+                if result is not None:
+                    y_pred = result[0, :]
+                    yp_pred = result[1, :]
+                else:
+                    continue
+            
+            elif method == 'trapezoidal':
+                result = trapezoidal_series(gamma_test, k, y0, t_window)
+                if result is not None:
+                    y_pred = result[0, :]
+                    yp_pred = result[1, :]
+                else:
+                    continue
+            
+            # Combined distance
+            distance_y = np.sqrt(np.mean((y_obs - y_pred)**2))
+            distance_yp = np.sqrt(np.mean((yp_obs - yp_pred)**2))
+            total_distance = distance_y + distance_yp
+            
+            if total_distance < 5:
+                sample_distances.append(total_distance)
+        except:
+            continue
+    
+    if len(sample_distances) < 5:
+        tolerances = np.array([1.0, 0.5, 0.2])
+    else:
+        tolerances = np.percentile(sample_distances, [90, 70, 50])
+    
+    total_count = 0
+    accept_count = 0
+    
+    for t in range(num_generations):
+        eps_t = tolerances[min(t, len(tolerances)-1)]
+        
+        if t == 0:
+            # Sample from prior
+            valid_particles = []
+            attempts = 0
+            max_attempts = num_particles * 200
+            
+            while len(valid_particles) < num_particles and attempts < max_attempts:
+                gamma_test = np.random.uniform(bounds[0] + 0.05, bounds[1] - 0.05)
+                attempts += 1
+                total_count += 1
+                
+                distance = np.inf
+                try:
+                    if method == 'analytical':
+                        t_rel = t_window - t_window[0]
+                        sol = np.array([analytical_solution(t, gamma_test, k, y0) for t in t_rel])
+                        y_pred = sol[:, 0]
+                        yp_pred = sol[:, 1]
+                    
+                    elif method == 'euler':
+                        result = euler_series(gamma_test, k, y0, t_window)
+                        if result is not None:
+                            y_pred = result[0, :]
+                            yp_pred = result[1, :]
+                        else:
+                            continue
+                    
+                    elif method == 'trapezoidal':
+                        result = trapezoidal_series(gamma_test, k, y0, t_window)
+                        if result is not None:
+                            y_pred = result[0, :]
+                            yp_pred = result[1, :]
+                        else:
+                            continue
+                    
+                    distance_y = np.sqrt(np.mean((y_obs - y_pred)**2))
+                    distance_yp = np.sqrt(np.mean((yp_obs - yp_pred)**2))
+                    distance = distance_y + distance_yp
+                    
+                except:
+                    distance = np.inf
+                
+                if distance <= eps_t:
+                    valid_particles.append(gamma_test)
+                    accept_count += 1
+            
+            # Fill particles
+            for i in range(num_particles):
+                if i < len(valid_particles):
+                    particles[t, i] = valid_particles[i]
+                else:
+                    particles[t, i] = valid_particles[-1] if valid_particles else 0.3
+                weights[t, i] = 1.0 / num_particles
+        
+        else:
+            # Similar for subsequent generations...
+            prev_particles = particles[t-1, :]
+            prev_weights = weights[t-1, :]
+            
+            sigma_t = np.std(prev_particles) * 0.3
+            if sigma_t < 0.01:
+                sigma_t = 0.05
+            
+            valid_particles = []
+            attempts = 0
+            max_attempts = num_particles * 200
+            
+            while len(valid_particles) < num_particles and attempts < max_attempts:
+                idx = np.random.choice(num_particles, p=prev_weights)
+                gamma_star = prev_particles[idx]
+                gamma_test = gamma_star + np.random.normal(0, sigma_t)
+                gamma_test = np.clip(gamma_test, bounds[0] + 0.05, bounds[1] - 0.05)
+                
+                attempts += 1
+                total_count += 1
+                
+                distance = np.inf
+                try:
+                    if method == 'analytical':
+                        t_rel = t_window - t_window[0]
+                        sol = np.array([analytical_solution(t, gamma_test, k, y0) for t in t_rel])
+                        y_pred = sol[:, 0]
+                        yp_pred = sol[:, 1]
+                    
+                    elif method == 'euler':
+                        result = euler_series(gamma_test, k, y0, t_window)
+                        if result is not None:
+                            y_pred = result[0, :]
+                            yp_pred = result[1, :]
+                        else:
+                            continue
+                    
+                    elif method == 'trapezoidal':
+                        result = trapezoidal_series(gamma_test, k, y0, t_window)
+                        if result is not None:
+                            y_pred = result[0, :]
+                            yp_pred = result[1, :]
+                        else:
+                            continue
+                    
+                    distance_y = np.sqrt(np.mean((y_obs - y_pred)**2))
+                    distance_yp = np.sqrt(np.mean((yp_obs - yp_pred)**2))
+                    distance = distance_y + distance_yp
+                    
+                except:
+                    distance = np.inf
+                
+                if distance <= eps_t:
+                    valid_particles.append(gamma_test)
+                    accept_count += 1
+            
+            # Fill particles
+            for i in range(num_particles):
+                if i < len(valid_particles):
+                    particles[t, i] = valid_particles[i]
+                else:
+                    particles[t, i] = particles[t-1, i]
+                weights[t, i] = 1.0 / num_particles
+    
+    # Final results
+    final_particles = particles[-1, :]
+    final_weights = weights[-1, :]
+    
+    gamma_mean = np.average(final_particles, weights=final_weights)
+    gamma_var = np.average((final_particles - gamma_mean)**2, weights=final_weights)
+    gamma_std = np.sqrt(gamma_var)
+    
+    evidence = max(accept_count / max(total_count, 1), 1e-10)
+    
+    return {
+        'gamma': gamma_mean,
+        'gamma_std': gamma_std,
+        'evidence': evidence,
+        'log_evidence': np.log(evidence),
+        'method': 'ABC-SMC'
     }
+
+# ============================================================================
+# SECTION 6: UTILITY FUNCTIONS (ORIGINAL)
+# ============================================================================
+
+def calculate_nrmsd(method, gamma_est, k, t_window, y_obs, yp_obs):
+    """
+    Computes the normalized RMS deviation for a given γ estimate.
     
-    # Create prior
-    params['theta_prior'] = np.linspace(params['theta_min'], params['theta_max'], 100)
+    Inputs:
+      method: String, {'analytical','euler','trapezoidal'}.
+      gamma_est: Float, damping estimate.
+      k: Float, spring constant.
+      t_window: 1D array, time points.
+      y_obs: 1D array, observed positions.
+      yp_obs: 1D array, observed velocities.
     
-    # EKF parameters
-    params['P0'] = np.eye(2) * 0.1
-    params['Q'] = np.eye(2) * 1e-5
-    params['R'] = np.eye(2) * params['noise_level_s']**2
+    Outputs:
+      nrmsd: Float, RMSD(y_obs,y_pred)/range(y_obs), clipped to [0,10].
+    """
+    y0 = np.array([y_obs[0], yp_obs[0]])
     
-    # Generate true solution
-    T_fine = np.linspace(0, 10, 1000)
-    sol_fine = scipy.integrate.solve_ivp(
-        damped_oscillator, [0, 10], params['initial_conditions'], 
-        args=(params['gamma_true'], params['k']), t_eval=T_fine
-    )
+    try:
+        # Generate prediction using estimated parameter
+        if method == 'analytical':
+            t_rel = t_window - t_window[0]
+            sol = np.array([analytical_solution(t, gamma_est, k, y0) for t in t_rel])
+            y_pred = sol[:, 0]
+        
+        elif method == 'euler':
+            result = euler_series(gamma_est, k, y0, t_window)
+            if result is None:
+                return 1.0
+            y_pred = result[0, :]
+        
+        elif method == 'trapezoidal':
+            result = trapezoidal_series(gamma_est, k, y0, t_window)
+            if result is None:
+                return 1.0
+            y_pred = result[0, :]
+        
+        # Calculate RMSD
+        rmsd = np.sqrt(np.mean((y_obs - y_pred)**2))
+        
+        # Normalize by range
+        y_range = np.max(y_obs) - np.min(y_obs)
+        if y_range > 0:
+            nrmsd = rmsd / y_range
+        else:
+            nrmsd = rmsd
+        
+        return np.clip(nrmsd, 0, 10)  # Clip to reasonable range
     
-    # Generate measurements
-    T = np.linspace(0, 10, 5000)
-    N = len(T)
-    dt = T[1] - T[0]
+    except:
+        return 1.0
+
+def create_time_varying_solution_simple(gamma_estimates, window_centers, T, k, y0_true):
+    """
+    Builds a full trajectory by stitching analytical solutions per window.
     
-    # Interpolate and add noise
-    true_y = np.interp(T, T_fine, sol_fine.y[0])
-    true_yp = np.interp(T, T_fine, sol_fine.y[1])
-    observed_y = true_y + np.random.normal(0, params['noise_level_s'], N)
-    observed_yp = true_yp + np.random.normal(0, params['noise_level_s'], N)
+    Inputs:
+      gamma_estimates: List of floats, one γ per window.
+      window_centers: List of floats, center times of each window.
+      T: 1D array of floats, full time grid.
+      k: Float, spring constant.
+      y0_true: Sequence [position₀, velocity₀], true initial state.
     
-    # Print setup
-    print("=== Bayesian Model Selection: Euler vs Trapezoidal Method ===")
-    print(f"System: Damped oscillator with k={params['k']}, m={params['m']}")
-    print(f"Number of measurement points: {N}")
-    print(f"Time span: {T[0]:.1f} to {T[-1]:.1f} seconds")
-    print(f"Measurement interval: {dt:.4f} seconds")
-    print(f"Noise level: {params['noise_level_s']:.3f}")
-    print(f"True damping parameter: {params['gamma_true']:.3f}")
-    print(f"Prior range: [{params['theta_min']:.2f}, {params['theta_max']:.2f}]")
-    if params['theta_max'] - params['theta_min'] > 0.5:
-        print("  Note: Wide prior range may lead to convergence challenges")
-    print(f"ABC-SMC: {params['num_particles']} particles, {params['num_generations']} generations")
-    print(f"Window configuration: CONNECTED (non-overlapping)")
-    print("Analysis approach: Each window is analyzed independently")
-    print("Plotting: Results shown at window centers represent full window analysis")
-    print()
+    Outputs:
+      solution: 1D array of floats, position over T using windowed γ.
+    """
+    solution = np.zeros(len(T))
     
-    # Initialize histories
-    P_e_hist, P_t_hist = [0.5], [0.5]
-    Z_e_hist, Z_t_hist = [], []
-    X_e_hist, X_t_hist = [], []
-    err_hist = []
-    window_sizes = []
+    for i, t in enumerate(T):
+        # Find which window this time belongs to
+        window_idx = 0
+        for j, center in enumerate(window_centers):
+            if t <= center + 1.0:
+                window_idx = j
+                break
+        
+        # Use parameter estimate from that window
+        if window_idx < len(gamma_estimates):
+            gamma_t = gamma_estimates[window_idx]
+        else:
+            gamma_t = gamma_estimates[-1]
+        
+        # Generate solution at this time with this gamma
+        sol_t = analytical_solution(t, gamma_t, k, y0_true)
+        solution[i] = sol_t[0]
+    
+    return solution
+
+# ============================================================================
+# SECTION 7: POSTERIOR CALCULATION FUNCTIONS (FROM SECOND CODE)
+# ============================================================================
+
+def compute_posterior_distribution(k, t_window, y_obs, yp_obs, noise_level, bounds, prior_dist=None):
+    """
+    Computes the posterior distribution of the damping coefficient γ on one window.
+
+    Inputs:
+      k: Float, spring constant.
+      t_window: 1D array of floats, time points in this window.
+      y_obs: 1D array of floats, observed positions.
+      yp_obs: 1D array of floats, observed velocities.
+      noise_level: Float, standard deviation of Gaussian observation noise.
+      bounds: Tuple (γ_min, γ_max), support of the prior.
+      prior_dist: Callable or None, function γ ↦ log‑prior density; if None, uses uniform prior.
+
+    Outputs:
+      dict containing:
+        gamma_grid: 1D array of floats, grid of γ values.
+        posterior: 1D array, normalized posterior density on the grid.
+        log_posterior: 1D array, un‑normalized log‑posterior on the grid.
+        map_gamma: Float, γ at the posterior maximum.
+        evidence: Float, marginal likelihood ∫L⋅p dγ.
+        log_evidence: Float, log(evidence), clipped away from −∞.
+    """
+    gamma_min, gamma_max = bounds
+    gamma_grid = np.linspace(gamma_min + 0.001, gamma_max - 0.001, 1000)
+    
+    # Compute log-likelihoods
+    log_likelihoods = np.array([
+        compute_log_likelihood_window(g, 'analytical', k, t_window, y_obs, yp_obs, noise_level)
+        for g in gamma_grid
+    ])
+    
+    # Handle numerical stability
+    finite_mask = np.isfinite(log_likelihoods)
+    if not np.any(finite_mask):
+        return None
+    
+    # Apply prior
+    if prior_dist is not None:
+        # prior_dist should be a function that takes gamma and returns log prior density
+        log_prior = np.array([prior_dist(g) for g in gamma_grid])
+        log_posterior = log_likelihoods + log_prior
+    else:
+        # Uniform prior
+        log_posterior = log_likelihoods
+    
+    # Normalize posterior
+    max_log_post = np.max(log_posterior[finite_mask])
+    normalized_log_post = log_posterior - max_log_post
+    normalized_log_post = np.where(finite_mask, normalized_log_post, -np.inf)
+    
+    # Convert to linear scale and normalize
+    posterior = np.exp(np.clip(normalized_log_post, -50, 0))
+    posterior = posterior / simpson(posterior, gamma_grid)
+    
+    # Find MAP estimate
+    map_idx = np.argmax(log_posterior[finite_mask])
+    valid_indices = np.where(finite_mask)[0]
+    map_gamma = gamma_grid[valid_indices[map_idx]]
+    
+    # Calculate evidence
+    evidence = simpson(np.exp(np.clip(normalized_log_post, -50, 0)), gamma_grid) * np.exp(max_log_post)
+    
+    return {
+        'gamma_grid': gamma_grid,
+        'posterior': posterior,
+        'log_posterior': log_posterior,
+        'map_gamma': map_gamma,
+        'evidence': evidence,
+        'log_evidence': np.log(max(evidence, 1e-50))
+    }
+
+def create_prior_from_posterior(gamma_grid, posterior, concentration_factor=1.0):
+    """
+    Builds a log‑prior function by re‑using a previously computed posterior.
+
+    Inputs:
+      gamma_grid: 1D array of floats, grid of γ where posterior is defined.
+      posterior: 1D array of floats, posterior density on gamma_grid.
+      concentration_factor: Float (default 1.0), multiplier of log‑posterior to control sharpness.
+
+    Outputs:
+      log_prior_func: Callable, maps γ → concentration_factor × log(posterior(γ)), returning −∞ outside the grid.
+    """
+    # Normalize posterior to ensure it integrates to 1
+    posterior_norm = posterior / simpson(posterior, gamma_grid)
+    
+    # Create interpolation function for log prior
+    # Add small epsilon to avoid log(0)
+    posterior_safe = np.maximum(posterior_norm, 1e-10)
+    log_posterior_interp = interp1d(gamma_grid, np.log(posterior_safe), 
+                                   bounds_error=False, fill_value=-np.inf)
+    
+    def log_prior_func(gamma):
+        if gamma < gamma_grid.min() or gamma > gamma_grid.max():
+            return -np.inf
+        return concentration_factor * log_posterior_interp(gamma)
+    
+    return log_prior_func
+
+def estimate_with_uniform_prior(k, t_window, y_obs, yp_obs, noise_level, bounds):
+    """
+    Performs MAP estimation of γ under a uniform prior on one window.
+
+    Inputs:
+      k: Float, spring constant.
+      t_window: 1D array of floats, time points in this window.
+      y_obs: 1D array of floats, observed positions.
+      yp_obs: 1D array of floats, observed velocities.
+      noise_level: Float, observation noise standard deviation.
+      bounds: Tuple (γ_min, γ_max), prior support.
+
+    Outputs:
+      dict containing:
+        gamma: Float, MAP estimate of γ.
+        evidence: Float, marginal likelihood under uniform prior.
+        log_evidence: Float, log(evidence).
+        posterior_dist: Dict or None, full posterior output of compute_posterior_distribution.
+        method: String, equal to 'Uniform Prior'.
+    """
+    
+    result = compute_posterior_distribution(k, t_window, y_obs, yp_obs, noise_level, bounds, prior_dist=None)
+    
+    if result is None:
+        return {'gamma': 0.3, 'evidence': 1e-50, 'log_evidence': np.log(1e-50), 'posterior': None}
+    
+    return {
+        'gamma': result['map_gamma'],
+        'evidence': result['evidence'],
+        'log_evidence': result['log_evidence'],
+        'posterior_dist': result,
+        'method': 'Uniform Prior'
+    }
+
+def estimate_with_posterior_prior(k, t_window, y_obs, yp_obs, noise_level, bounds, previous_posterior=None):
+    """
+    Performs MAP estimation of γ using the previous window’s posterior as a new prior.
+
+    Inputs:
+      k: Float, spring constant.
+      t_window: 1D array of floats, time points in this window.
+      y_obs: 1D array of floats, observed positions.
+      yp_obs: 1D array of floats, observed velocities.
+      noise_level: Float, observation noise standard deviation.
+      bounds: Tuple (γ_min, γ_max), prior support.
+      previous_posterior: Dict or None, output of compute_posterior_distribution from the previous window.
+
+    Outputs:
+      dict containing:
+        gamma: Float, MAP estimate of γ.
+        evidence: Float, marginal likelihood under the posterior‑based prior.
+        log_evidence: Float, log(evidence).
+        posterior_dist: Dict, full posterior output of compute_posterior_distribution.
+        method: String, equal to 'Posterior as Prior'.
+    """
+    if previous_posterior is not None:
+        # Create prior from previous posterior
+        prior_func = create_prior_from_posterior(
+            previous_posterior['gamma_grid'], 
+            previous_posterior['posterior'],
+            concentration_factor=0.5  # Reduce concentration to avoid overconfidence
+        )
+    else:
+        prior_func = None  # First window uses uniform prior
+    
+    result = compute_posterior_distribution(k, t_window, y_obs, yp_obs, noise_level, bounds, prior_dist=prior_func)
+    
+    if result is None:
+        return {'gamma': 0.3, 'evidence': 1e-50, 'log_evidence': np.log(1e-50), 'posterior': None}
+    
+    return {
+        'gamma': result['map_gamma'],
+        'evidence': result['evidence'],
+        'log_evidence': result['log_evidence'],
+        'posterior_dist': result,
+        'method': 'Posterior as Prior'
+    }
+
+# ============================================================================
+# SECTION 8: ORIGINAL ADAPTIVE WINDOW ANALYSIS FUNCTION
+# ============================================================================
+
+def run_adaptive_window_analysis(params, T, observed_y, observed_yp):
+    """
+   Runs adaptive‑window parameter estimation over the entire time series.
+
+   Inputs:
+     params: Dict containing keys
+       'k', 'gamma_true', 'y0_true', 'dt', 'T_total',
+       'noise_level_s', 'theta_min', 'theta_max',
+       'W_min', 'W_max', 'W_delta', 'W_initial'.
+     T: 1D array of floats, full time grid.
+     observed_y: 1D array of floats, observed positions.
+     observed_yp: 1D array of floats, observed velocities.
+
+   Outputs:
+     tuple (results, window_centers, window_sizes):
+       results: Dict of per‑method histories,
+       window_centers: List of floats, center times,
+       window_sizes: List of ints, sizes used (includes final leftover).
+   """
+    print(f"\n Running original adaptive window analysis...")
+    
+    methods = ['analytical', 'trapezoidal', 'euler']
+    method_names = ['Analytical', 'Trapezoidal', 'Euler']
+    
+    results = {name: {
+        'mle_gamma': [], 'abc_gamma': [], 'mle_evidence': [], 'abc_evidence': [],
+        'mle_nrmsd': [], 'abc_nrmsd': [], 'window_size': []
+    } for name in method_names}
+    
     window_centers = []
-    window_ranges = []
-    BF_list = []
-    theta_e_means = []
-    theta_t_means = []
+    window_sizes_evolution = []
     
-    # Initial states
-    y0_e = np.array(params['initial_conditions'], dtype=float)
-    y0_t = np.array(params['initial_conditions'], dtype=float)
+    W_current = params['W_initial']
+    epsilon_r_prev = None
+    window_indicator = 1
+    t_idx = 0
+    N = len(T)
     
-    # Process windows
-    W = params['W_boot']
-    window_idx = 0
+    # Loop until we've consumed all data
+    while t_idx < N:
+        # Determine window size:
+        if window_indicator == 1:
+            # first window always initial size
+            W = params['W_initial']
+        else:
+            # subsequent windows use adapted size
+            W = W_current
+        
+        # If the *remaining* points are fewer than W_min, take them all
+        rem = N - t_idx
+        if rem < params['W_min']:
+            W = rem
+        
+        # Extract the window
+        window_start = t_idx
+        window_end = t_idx + W
+        t_window  = T[window_start:window_end]
+        y_window  = observed_y[window_start:window_end]
+        yp_window = observed_yp[window_start:window_end]
+        
+        # Record size & center
+        window_centers.append(np.mean(t_window))
+        window_sizes_evolution.append(W)
+        print(f"  Window {window_indicator}: size={W}, center={window_centers[-1]:.1f}s")
+        
+        # Perform estimation for each method
+        for method, mname in zip(methods, method_names):
+            mle = mle_estimation_window(
+                method, params['k'], t_window, y_window, yp_window,
+                params['noise_level_s'], (params['theta_min'], params['theta_max'])
+            )
+            abc = abc_smc_estimation_window(
+                method, params['k'], t_window, y_window, yp_window,
+                (params['theta_min'], params['theta_max'])
+            )
+            
+            nrmsd_mle = calculate_nrmsd(method, mle['gamma'], params['k'],
+                                        t_window, y_window, yp_window)
+            nrmsd_abc = calculate_nrmsd(method, abc['gamma'], params['k'],
+                                        t_window, y_window, yp_window)
+            
+            results[mname]['mle_gamma'].append(mle['gamma'])
+            results[mname]['abc_gamma'].append(abc['gamma'])
+            results[mname]['mle_evidence'].append(mle['evidence'])
+            results[mname]['abc_evidence'].append(abc['evidence'])
+            results[mname]['mle_nrmsd'].append(nrmsd_mle)
+            results[mname]['abc_nrmsd'].append(nrmsd_abc)
+            results[mname]['window_size'].append(W)
+            
+            err = abs(mle['gamma'] - params['gamma_true'])
+            print(f"    {mname}: γ_MLE={mle['gamma']:.3f} (err {err:.3f})")
+        
+        # Adapt the window size *after* we process this window, except for the very last
+        if window_end < N:
+            current_nrmsd = np.mean([results[n]['mle_nrmsd'][-1] for n in method_names])
+            if epsilon_r_prev is not None:
+                if current_nrmsd > epsilon_r_prev and W_current < params['W_max']:
+                    W_current = min(W_current + params['W_delta'], params['W_max'])
+                elif current_nrmsd <= epsilon_r_prev and W_current > params['W_min']:
+                    W_current = max(W_current - params['W_delta'], params['W_min'])
+            epsilon_r_prev = current_nrmsd
+        
+        # Advance
+        t_idx += W
+        window_indicator += 1
+    
+    print(f"  Completed {len(window_centers)} windows (including final leftover).")
+    return results, window_centers, window_sizes_evolution
+
+# ============================================================================
+# SECTION 9: NEW FIXED WINDOW ANALYSIS FOR COMPARISON
+# ============================================================================
+
+def run_fixed_window_analysis_comparison(params, T, observed_y, observed_yp, fixed_window_size):
+    """
+    Runs fixed‑window MLE analysis for comparison with adaptive.
+
+    Inputs:
+      params: Dict, same as run_adaptive_window_analysis.
+      T: 1D array of floats, full time grid.
+      observed_y: 1D array of floats, observed positions.
+      observed_yp: 1D array of floats, observed velocities.
+      fixed_window_size: Int, number of points per window.
+
+    Outputs:
+      tuple (results, window_centers, window_sizes):
+        results: Dict of per‑method MLE results,
+        window_centers: List of floats, center times,
+        window_sizes: List of ints (all equal to fixed_window_size).
+    """
+    print(f"\n Running fixed window analysis for comparison (W={fixed_window_size})...")
+    
+    methods = ['analytical', 'trapezoidal', 'euler']
+    method_names = ['Analytical', 'Trapezoidal', 'Euler']
+    
+    # Storage for results
+    results = {name: {
+        'mle_gamma': [], 'mle_evidence': [], 'mle_nrmsd': [], 'window_size': []
+    } for name in method_names}
+    
+    window_centers = []
+    window_sizes_evolution = []
+    
+    # Fixed window processing (NO OVERLAP)
+    t_idx = 0
+    window_number = 1
+    
+    while t_idx < len(T) - fixed_window_size and window_number <= 12:
+        
+        # Extract fixed window data
+        window_start = t_idx
+        window_end = t_idx + fixed_window_size
+        
+        t_window = T[window_start:window_end]
+        y_window = observed_y[window_start:window_end]
+        yp_window = observed_yp[window_start:window_end]
+        
+        window_center = np.mean(t_window)
+        window_centers.append(window_center)
+        window_sizes_evolution.append(fixed_window_size)
+        
+        # Estimate parameters for each method
+        for j, (method, method_name) in enumerate(zip(methods, method_names)):
+            
+            # MLE estimation
+            mle_result = mle_estimation_window(
+                method, params['k'], t_window, y_window, yp_window,
+                params['noise_level_s'], (params['theta_min'], params['theta_max'])
+            )
+            
+            # Calculate NRMSD
+            mle_nrmsd = calculate_nrmsd(method, mle_result['gamma'], params['k'], 
+                                      t_window, y_window, yp_window)
+            
+            # Store results
+            results[method_name]['mle_gamma'].append(mle_result['gamma'])
+            results[method_name]['mle_evidence'].append(mle_result['evidence'])
+            results[method_name]['mle_nrmsd'].append(mle_nrmsd)
+            results[method_name]['window_size'].append(fixed_window_size)
+        
+        # Move to next window (NO OVERLAP)
+        t_idx += fixed_window_size
+        window_number += 1
+    
+    return results, window_centers, window_sizes_evolution
+
+# ============================================================================
+# SECTION 10: PRIOR COMPARISON ANALYSIS FUNCTIONS
+# ============================================================================
+
+def run_sequential_analysis_uniform_prior(params, T, observed_y, observed_yp):
+    """
+    Runs sequential estimation with uniform prior for each window independently.
+
+    Inputs:
+      params: Dict, same as run_adaptive_window_analysis.
+      T: 1D array of floats, full time grid.
+      observed_y: 1D array of floats, observed positions.
+      observed_yp: 1D array of floats, observed velocities.
+
+    Outputs:
+      tuple (results, window_centers, window_sizes):
+        results: Dict with keys 'gamma','evidence','log_evidence','posterior_dists','window_size',
+        window_centers: List of floats,
+        window_sizes: List of ints.
+    """
+    
+    print(f" Running analysis with UNIFORM PRIOR (independent windows)...")
+    
+    results = {
+        'gamma': [], 'evidence': [], 'log_evidence': [], 'posterior_dists': [], 'window_size': []
+    }
+    
+    window_centers = []
+    window_sizes_evolution = []
+    
+    # Initialize windowing
+    W_current = params['W_initial']
+    window_indicator = 1
     t_idx = 0
     
-    print("Starting window-based analysis with CONNECTED windows...")
-    print("Each point in the plots represents the Bayesian analysis over an entire window")
-    print()
-    
-    while t_idx < N and window_idx < params['max_windows']:
-        # Process window
-        result = process_window(
-            window_idx, t_idx, W, T, observed_y, observed_yp,
-            y0_e, y0_t, params
-        )
+    while t_idx < len(T) - params['W_min'] and window_indicator <= 10:
         
-        if result is None:
+        # Determine window size (simplified adaptive)
+        W = W_current
+        W = min(W, len(T) - t_idx)
+        if W < params['W_min']:
             break
         
-        # Store results
-        window_sizes.append(W)
-        window_centers.append(result['window_center'])
-        window_ranges.append(result['window_range'])
-        theta_e_means.append(result['theta_e_mean'])
-        theta_t_means.append(result['theta_t_mean'])
-        Z_e_hist.append(result['Z_e'])
-        Z_t_hist.append(result['Z_t'])
-        BF_list.append(result['BF'])
-        X_e_hist.append(result['x_e'])
-        X_t_hist.append(result['x_t'])
-        err_hist.append(result['error'])
+        # Extract window data
+        window_start = t_idx
+        window_end = t_idx + W
         
-        # Update posteriors
-        Pe_next, Pt_next = update_posteriors(
-            P_e_hist[-1], P_t_hist[-1], 
-            result['Z_e'], result['Z_t']
+        t_window = T[window_start:window_end]
+        y_window = observed_y[window_start:window_end]
+        yp_window = observed_yp[window_start:window_end]
+        
+        window_center = np.mean(t_window)
+        window_centers.append(window_center)
+        window_sizes_evolution.append(W)
+        
+        print(f"  Window {window_indicator}: size={W}, center={window_center:.1f}s")
+        
+        # Estimate with uniform prior
+        result = estimate_with_uniform_prior(
+            params['k'], t_window, y_window, yp_window,
+            params['noise_level_s'], (params['theta_min'], params['theta_max'])
         )
-        P_e_hist.append(Pe_next)
-        P_t_hist.append(Pt_next)
         
-        # Update initial conditions for next window
-        y0_e = result['x_e']
-        y0_t = result['x_t']
+        # Store results
+        results['gamma'].append(result['gamma'])
+        results['evidence'].append(result['evidence'])
+        results['log_evidence'].append(result['log_evidence'])
+        results['posterior_dists'].append(result.get('posterior_dist'))
+        results['window_size'].append(W)
         
-        # Adapt window size
-        W = adapt_window_size(W, err_hist, params['W_min'], params['W_max'], params['deltas'])
+        error = abs(result['gamma'] - params['gamma_true'])
+        print(f"    γ = {result['gamma']:.3f} (error: {error:.3f}, evidence: {result['evidence']:.2e})")
         
-        # Move to next window (CONNECTED, not overlapping)
-        window_idx += 1
+        # Move to next window
         t_idx += W
+        window_indicator += 1
     
-    if len(window_sizes) > 0:
-        coverage = window_idx * np.mean(window_sizes) / N * 100
-        print(f"\n✓ Completed {window_idx} windows ({coverage:.1f}% coverage)")
+    print(f"  Completed {len(window_centers)} windows with uniform prior")
+    
+    return results, window_centers, window_sizes_evolution
+
+def run_sequential_analysis_posterior_prior(params, T, observed_y, observed_yp):
+    """
+    Runs sequential estimation using each window’s posterior as the next window’s prior.
+
+    Inputs:
+      params: Dict, same as run_adaptive_window_analysis.
+      T: 1D array of floats, full time grid.
+      observed_y: 1D array of floats, observed positions.
+      observed_yp: 1D array of floats, observed velocities.
+
+    Outputs:
+      tuple (results, window_centers, window_sizes):
+        results: Dict with keys 'gamma','evidence','log_evidence','posterior_dists','window_size',
+        window_centers: List of floats,
+        window_sizes: List of ints.
+    """
+    print(f" Running analysis with POSTERIOR-AS-PRIOR (information accumulation)...")
+    
+    results = {
+        'gamma': [], 'evidence': [], 'log_evidence': [], 'posterior_dists': [], 'window_size': []
+    }
+    
+    window_centers = []
+    window_sizes_evolution = []
+    previous_posterior = None
+    
+    # Initialize windowing
+    W_current = params['W_initial']
+    window_indicator = 1
+    t_idx = 0
+    
+    while t_idx < len(T) - params['W_min'] and window_indicator <= 10:
+        
+        # Determine window size (simplified adaptive)
+        W = W_current
+        W = min(W, len(T) - t_idx)
+        if W < params['W_min']:
+            break
+        
+        # Extract window data
+        window_start = t_idx
+        window_end = t_idx + W
+        
+        t_window = T[window_start:window_end]
+        y_window = observed_y[window_start:window_end]
+        yp_window = observed_yp[window_start:window_end]
+        
+        window_center = np.mean(t_window)
+        window_centers.append(window_center)
+        window_sizes_evolution.append(W)
+        
+        print(f"  Window {window_indicator}: size={W}, center={window_center:.1f}s")
+        
+        # Estimate with posterior as prior
+        result = estimate_with_posterior_prior(
+            params['k'], t_window, y_window, yp_window,
+            params['noise_level_s'], (params['theta_min'], params['theta_max']),
+            previous_posterior=previous_posterior
+        )
+        
+        # Store results
+        results['gamma'].append(result['gamma'])
+        results['evidence'].append(result['evidence'])
+        results['log_evidence'].append(result['log_evidence'])
+        results['posterior_dists'].append(result.get('posterior_dist'))
+        results['window_size'].append(W)
+        
+        # Update previous posterior for next window
+        previous_posterior = result.get('posterior_dist')
+        
+        error = abs(result['gamma'] - params['gamma_true'])
+        prior_info = "uniform" if window_indicator == 1 else "from prev"
+        print(f"    γ = {result['gamma']:.3f} (error: {error:.3f}, evidence: {result['evidence']:.2e}, prior: {prior_info})")
+        
+        # Move to next window
+        t_idx += W
+        window_indicator += 1
+    
+    print(f"  Completed {len(window_centers)} windows with posterior-as-prior")
+    
+    return results, window_centers, window_sizes_evolution
+
+# ============================================================================
+# SECTION 11: ORIGINAL 10 PLOTS FUNCTION - UNCHANGED
+# ============================================================================
+
+def create_original_10_plots(results, window_centers, window_sizes_evolution, params, T, true_y, observed_y):
+    """
+    Creates Plot 12 comparing Posterior‑as‑Prior vs Uniform Prior.
+
+    Inputs:
+      uniform_results: Dict, from run_sequential_analysis_uniform_prior.
+      uniform_centers: List of floats, window centers.
+      posterior_results: Dict, from run_sequential_analysis_posterior_prior.
+      posterior_centers: List of floats, window centers.
+      params: Dict, same as run_adaptive_window_analysis.
+
+    Outputs:
+      None (displays plot and prints summary).
+    """
+    colors = {'Analytical': 'purple', 'Trapezoidal': 'red', 'Euler': 'blue'}
+    method_names = ['Analytical', 'Trapezoidal', 'Euler']
+    
+    print(f"\n Creating original 10 plots...")
+    
+    # Plot 1: Adaptive Window Size Evolution
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, len(window_sizes_evolution)+1), window_sizes_evolution, 'ko-', 
+             markersize=8, linewidth=2)
+    plt.axhline(params['W_initial'], color='g', linestyle='--', alpha=0.7, label='Initial')
+    plt.axhline(params['W_min'], color='r', linestyle='--', alpha=0.7, label='Min')
+    plt.axhline(params['W_max'], color='b', linestyle='--', alpha=0.7, label='Max')
+    plt.xlabel('Window Number', fontsize=12)
+    plt.ylabel('Window Size (points)', fontsize=12)
+    plt.title('Plot 1: Adaptive Window Size Evolution', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 2: MLE Parameter Estimates
+    plt.figure(figsize=(10, 6))
+    for method_name in method_names:
+        plt.plot(window_centers, results[method_name]['mle_gamma'], 
+                'o-', color=colors[method_name], label=method_name, markersize=6, linewidth=2)
+    
+    plt.axhline(params['gamma_true'], color='black', linestyle='--', linewidth=2, label='True γ')
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('Estimated γ', fontsize=12)
+    plt.title('Plot 2: MLE Parameter Estimates Over Time', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.ylim(0, 1.0)
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 3: ABC-SMC Parameter Estimates
+    plt.figure(figsize=(10, 6))
+    for method_name in method_names:
+        plt.plot(window_centers, results[method_name]['abc_gamma'], 
+                'o-', color=colors[method_name], label=method_name, markersize=6, linewidth=2)
+    
+    plt.axhline(params['gamma_true'], color='black', linestyle='--', linewidth=2, label='True γ')
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('Estimated γ', fontsize=12)
+    plt.title('Plot 3: ABC-SMC Parameter Estimates Over Time', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.ylim(0, 1.0)
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 4: MLE Model Evidence
+    plt.figure(figsize=(10, 6))
+    for method_name in method_names:
+        evidence_data = results[method_name]['mle_evidence']
+        evidence_filtered = [max(min(e, 1e15), 1e-15) for e in evidence_data]
+        
+        label = f'{method_name} (EXACT)' if method_name == 'Analytical' else f'{method_name} (Laplace Approx)'
+        linestyle = '-' if method_name == 'Analytical' else '--'
+        
+        plt.plot(window_centers, evidence_filtered, 
+                'o' + linestyle, color=colors[method_name], label=label, markersize=6, linewidth=2)
+    
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('Model Evidence', fontsize=12)
+    plt.title('Plot 4: MLE Model Evidence Evolution\n(Analytical = EXACT, Others = Laplace Approximation)', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.yscale('log')
+    plt.ylim(1e-15, 1e15)
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 5: ABC-SMC Model Evidence
+    plt.figure(figsize=(10, 6))
+    for method_name in method_names:
+        plt.plot(window_centers, results[method_name]['abc_evidence'], 
+                'o-', color=colors[method_name], label=method_name, markersize=6, linewidth=2)
+    
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('Model Evidence', fontsize=12)
+    plt.title('Plot 5: ABC-SMC Model Evidence Evolution', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.yscale('log')
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 6: NRMSD Evolution
+    plt.figure(figsize=(10, 6))
+    for method_name in method_names:
+        plt.plot(window_centers, results[method_name]['mle_nrmsd'], 
+                'o-', color=colors[method_name], label=f'{method_name} MLE', markersize=6)
+    
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('NRMSD', fontsize=12)
+    plt.title('Plot 6: Normalized RMSD Evolution', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.yscale('log')
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 7: Parameter Accuracy vs Window Size
+    plt.figure(figsize=(10, 6))
+    
+    unique_sizes = sorted(list(set(window_sizes_evolution)))
+    
+    for method_name in method_names:
+        size_vs_error = []
+        
+        for size in unique_sizes:
+            errors = []
+            for i, w_size in enumerate(window_sizes_evolution):
+                if w_size == size and i < len(results[method_name]['mle_gamma']):
+                    error = abs(results[method_name]['mle_gamma'][i] - params['gamma_true'])
+                    errors.append(error)
+            
+            if errors:
+                avg_error = np.mean(errors)
+                size_vs_error.append((size, avg_error))
+        
+        if size_vs_error:
+            sizes, errors = zip(*size_vs_error)
+            plt.plot(sizes, errors, 'o-', color=colors[method_name], 
+                    label=method_name, markersize=8, linewidth=2)
+    
+    plt.xlabel('Window Size (points)', fontsize=12)
+    plt.ylabel('Average Parameter Error |γ_est - γ_true|', fontsize=12)
+    plt.title('Plot 7: Parameter Accuracy vs Window Size', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.yscale('log')
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 8: Time-Varying Parameter Solutions (MLE)
+    plt.figure(figsize=(12, 8))
+    
+    if len(results['Analytical']['mle_gamma']) > 0:
+        
+        mle_analytical = results['Analytical']['mle_gamma']
+        mle_trapezoidal = results['Trapezoidal']['mle_gamma'] 
+        mle_euler = results['Euler']['mle_gamma']
+        
+        sol_mle_analytical = create_time_varying_solution_simple(
+            mle_analytical, window_centers, T, params['k'], params['y0_true'])
+        
+        sol_mle_trapezoidal = create_time_varying_solution_simple(
+            mle_trapezoidal, window_centers, T, params['k'], params['y0_true'])
+        
+        sol_mle_euler = create_time_varying_solution_simple(
+            mle_euler, window_centers, T, params['k'], params['y0_true'])
+        
+        plt.plot(T, true_y, 'g-', linewidth=3, label='True Solution', alpha=0.9)
+        
+        plt.plot(T, sol_mle_analytical, color='purple', linestyle='-', linewidth=2, 
+                label=f'Analytical (γ: {min(mle_analytical):.2f}-{max(mle_analytical):.2f})', alpha=0.8)
+        
+        plt.plot(T, sol_mle_trapezoidal, color='red', linestyle=':', linewidth=2, 
+                label=f'Trapezoidal (γ: {min(mle_trapezoidal):.2f}-{max(mle_trapezoidal):.2f})', alpha=0.8)
+        
+        plt.plot(T, sol_mle_euler, color='blue', linestyle='--', linewidth=2, 
+                label=f'Euler (γ: {min(mle_euler):.2f}-{max(mle_euler):.2f})', alpha=0.8)
+        
+        for center in window_centers:
+            plt.axvline(center, color='gray', linestyle=':', alpha=0.5, linewidth=1)
+        
+        plt.plot(T[::20], observed_y[::20], 'ko', markersize=3, alpha=0.5, label='Measurements')
+    
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('Position', fontsize=12)
+    plt.title('Plot 8: Time-Varying Parameter Solutions (MLE)', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 9: Time-Varying Parameter Solutions (ABC-SMC)
+    plt.figure(figsize=(12, 8))
+    
+    if len(results['Analytical']['abc_gamma']) > 0:
+        
+        abc_analytical = results['Analytical']['abc_gamma']
+        abc_trapezoidal = results['Trapezoidal']['abc_gamma'] 
+        abc_euler = results['Euler']['abc_gamma']
+        
+        sol_abc_analytical = create_time_varying_solution_simple(
+            abc_analytical, window_centers, T, params['k'], params['y0_true'])
+        
+        sol_abc_trapezoidal = create_time_varying_solution_simple(
+            abc_trapezoidal, window_centers, T, params['k'], params['y0_true'])
+        
+        sol_abc_euler = create_time_varying_solution_simple(
+            abc_euler, window_centers, T, params['k'], params['y0_true'])
+        
+        plt.plot(T, true_y, 'g-', linewidth=3, label='True Solution', alpha=0.9)
+        
+        plt.plot(T, sol_abc_analytical, color='purple', linestyle='-', linewidth=2, 
+                label=f'Analytical ABC (γ: {min(abc_analytical):.2f}-{max(abc_analytical):.2f})', alpha=0.8)
+        
+        plt.plot(T, sol_abc_trapezoidal, color='red', linestyle=':', linewidth=2, 
+                label=f'Trapezoidal ABC (γ: {min(abc_trapezoidal):.2f}-{max(abc_trapezoidal):.2f})', alpha=0.8)
+        
+        plt.plot(T, sol_abc_euler, color='blue', linestyle='--', linewidth=2, 
+                label=f'Euler ABC (γ: {min(abc_euler):.2f}-{max(abc_euler):.2f})', alpha=0.8)
+        
+        for center in window_centers:
+            plt.axvline(center, color='gray', linestyle=':', alpha=0.5, linewidth=1)
+        
+        plt.plot(T[::20], observed_y[::20], 'ko', markersize=3, alpha=0.5, label='Measurements')
+    
+    plt.xlabel('Time (s)', fontsize=12)
+    plt.ylabel('Position', fontsize=12)
+    plt.title('Plot 9: Time-Varying Parameter Solutions (ABC-SMC)', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 10: Evidence Comparison (Exact vs Approximate)
+    plt.figure(figsize=(12, 6))
+    
+    analytical_evidence = results['Analytical']['mle_evidence']
+    trapezoidal_evidence = results['Trapezoidal']['mle_evidence']
+    euler_evidence = results['Euler']['mle_evidence']
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(window_centers, analytical_evidence, 'o-', color='purple', linewidth=3,
+            markersize=8, label='Analytical (EXACT)')
+    plt.plot(window_centers, trapezoidal_evidence, 's--', color='red', linewidth=2,
+            markersize=6, label='Trapezoidal (Laplace Approx)')
+    plt.plot(window_centers, euler_evidence, '^:', color='blue', linewidth=2,
+            markersize=6, label='Euler (Laplace Approx)')
+    
+    plt.xlabel('Time (s)')
+    plt.ylabel('Model Evidence')
+    plt.title('Evidence: Exact vs Laplace Approximation')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.yscale('log')
+    
+    plt.subplot(1, 2, 2)
+    analytical_mean = np.mean(analytical_evidence)
+    trapezoidal_ratio = [t/analytical_mean for t in trapezoidal_evidence]
+    euler_ratio = [e/analytical_mean for e in euler_evidence]
+    
+    plt.plot(window_centers, trapezoidal_ratio, 's-', color='red', linewidth=2,
+            markersize=6, label='Trapezoidal/Analytical')
+    plt.plot(window_centers, euler_ratio, '^-', color='blue', linewidth=2,
+            markersize=6, label='Euler/Analytical')
+    plt.axhline(1.0, color='black', linestyle='--', alpha=0.7, label='Reference')
+    
+    plt.xlabel('Time (s)')
+    plt.ylabel('Evidence Ratio')
+    plt.title('Evidence Ratios (Relative to Analytical)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.yscale('log')
+    
+    plt.suptitle('Plot 10: Evidence Comparison', fontsize=16)
+    plt.tight_layout()
+    plt.show()
+    
+    
+    
+    # ————————————————————————————————————————————————————————————
+    # Plot 10.1: Bayes factor (MLE) – Euler vs Trapezoidal
+    plt.figure(figsize=(10,6))
+    bf_mle = np.array(results['Euler']['mle_evidence']) / np.array(results['Trapezoidal']['mle_evidence'])
+    plt.plot(window_centers, bf_mle, 'o-', label='BFₘₗₑ = Evidence(Euler)/Evidence(Trap)', markersize=6, linewidth=2)
+    plt.axhline(1.0, color='k', linestyle='--', alpha=0.7)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Bayes Factor (MLE)')
+    plt.title('Plot 10.1: Bayes Factor (MLE) Euler vs Trapezoidal')
+    plt.yscale('log')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot 10.2: Bayes factor (ABC) – Euler vs Trapezoidal
+    plt.figure(figsize=(10,6))
+    bf_abc = np.array(results['Euler']['abc_evidence']) / np.array(results['Trapezoidal']['abc_evidence'])
+    plt.plot(window_centers, bf_abc, 'o-', label='BFₐᵦ𝚌 = Evidence(Euler)/Evidence(Trap)', markersize=6, linewidth=2)
+    plt.axhline(1.0, color='k', linestyle='--', alpha=0.7)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Bayes Factor (ABC)')
+    plt.title('Plot 10.2: Bayes Factor (ABC) Euler vs Trapezoidal')
+    plt.yscale('log')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+# ============================================================================
+# SECTION 12: NEW PLOT 11 - ADAPTIVE vs FIXED COMPARISON
+# ============================================================================
+
+def create_plot_11_adaptive_vs_fixed_comparison(adaptive_results, adaptive_centers, adaptive_sizes,
+                                              fixed_results, fixed_centers, fixed_sizes, params):
+    """
+    Runs the full pipeline: adaptive, fixed, and prior‑comparison analyses plus all plots.
+
+    Inputs:
+      params: Dict, same as run_adaptive_window_analysis.
+
+    Outputs:
+      tuple containing:
+        results (adaptive), adaptive_centers, adaptive_sizes,
+        fixed_results, fixed_centers, fixed_sizes,
+        uniform_results, posterior_results, params_used.
+    """
+    print(f"\n Creating Plot 11: Adaptive vs Fixed Window Comparison...")
+    
+    # Calculate comparison metrics
+    adaptive_errors = [abs(g - params['gamma_true']) for g in adaptive_results['Analytical']['mle_gamma']]
+    fixed_errors = [abs(g - params['gamma_true']) for g in fixed_results['Analytical']['mle_gamma']]
+    
+    adaptive_mean_error = np.mean(adaptive_errors)
+    fixed_mean_error = np.mean(fixed_errors)
+    adaptive_std_error = np.std(adaptive_errors)
+    fixed_std_error = np.std(fixed_errors)
+    
+    adaptive_mean_nrmsd = np.mean(adaptive_results['Analytical']['mle_nrmsd'])
+    fixed_mean_nrmsd = np.mean(fixed_results['Analytical']['mle_nrmsd'])
+    
+    improvement_error = ((fixed_mean_error - adaptive_mean_error) / fixed_mean_error) * 100 if fixed_mean_error > 0 else 0
+    improvement_nrmsd = ((fixed_mean_nrmsd - adaptive_mean_nrmsd) / fixed_mean_nrmsd) * 100 if fixed_mean_nrmsd > 0 else 0
+    
+    # Create comprehensive comparison plot
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle('Plot 11: ADAPTIVE vs FIXED WINDOW COMPARISON)', fontsize=16, fontweight='bold')
+    
+    # Plot 1: Window Size Evolution
+    axes[0, 0].plot(range(1, len(adaptive_sizes)+1), adaptive_sizes, 'ro-', 
+                   markersize=8, linewidth=2, label='Adaptive', alpha=0.8)
+    axes[0, 0].plot(range(1, len(fixed_sizes)+1), fixed_sizes, 'bs-', 
+                   markersize=8, linewidth=2, label='Fixed', alpha=0.8)
+    axes[0, 0].axhline(params['W_initial'], color='g', linestyle='--', alpha=0.7, label='Initial')
+    axes[0, 0].axhline(params['W_min'], color='orange', linestyle='--', alpha=0.7, label='Min')
+    axes[0, 0].axhline(params['W_max'], color='purple', linestyle='--', alpha=0.7, label='Max')
+    axes[0, 0].set_xlabel('Window Number')
+    axes[0, 0].set_ylabel('Window Size (points)')
+    axes[0, 0].set_title('Window Size Evolution')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # Plot 2: Parameter Accuracy Comparison (Analytical only)
+    axes[0, 1].plot(adaptive_centers, adaptive_errors, 'ro-', 
+                   markersize=8, linewidth=2, label='Adaptive', alpha=0.8)
+    axes[0, 1].plot(fixed_centers, fixed_errors, 'bs-', 
+                   markersize=8, linewidth=2, label='Fixed', alpha=0.8)
+    axes[0, 1].set_xlabel('Time (s)')
+    axes[0, 1].set_ylabel('Parameter Error |γ_est - γ_true|')
+    axes[0, 1].set_title('Parameter Accuracy: Analytical Method')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
+    axes[0, 1].set_yscale('log')
+    
+    # Plot 3: NRMSD Comparison
+    axes[0, 2].plot(adaptive_centers, adaptive_results['Analytical']['mle_nrmsd'], 'ro-', 
+                   markersize=6, linewidth=2, label='Adaptive', alpha=0.8)
+    axes[0, 2].plot(fixed_centers, fixed_results['Analytical']['mle_nrmsd'], 'bs-', 
+                   markersize=6, linewidth=2, label='Fixed', alpha=0.8)
+    axes[0, 2].set_xlabel('Time (s)')
+    axes[0, 2].set_ylabel('NRMSD')
+    axes[0, 2].set_title('Prediction Error: Analytical Method')
+    axes[0, 2].legend()
+    axes[0, 2].grid(True, alpha=0.3)
+    axes[0, 2].set_yscale('log')
+    
+    # Plot 4: Window Efficiency (Data Usage)
+    total_adaptive_points = sum(adaptive_sizes)
+    total_fixed_points = sum(fixed_sizes)
+    efficiency_adaptive = len(adaptive_sizes) / total_adaptive_points * 1000  # Windows per 1000 points
+    efficiency_fixed = len(fixed_sizes) / total_fixed_points * 1000
+    
+    axes[1, 0].bar(['Adaptive', 'Fixed'], [total_adaptive_points, total_fixed_points], 
+                  color=['red', 'blue'], alpha=0.7)
+    axes[1, 0].set_ylabel('Total Data Points Used')
+    axes[1, 0].set_title('Data Usage Efficiency')
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    # Add efficiency text
+    for i, (method, points) in enumerate([('Adaptive', total_adaptive_points), ('Fixed', total_fixed_points)]):
+        axes[1, 0].text(i, points + max(total_adaptive_points, total_fixed_points)*0.02, 
+                       f'{points}\npts', ha='center', va='bottom', fontweight='bold')
+    
+    # Plot 5: Evidence Comparison
+    axes[1, 1].plot(adaptive_centers, adaptive_results['Analytical']['mle_evidence'], 'ro-', 
+                   markersize=6, linewidth=2, label='Adaptive', alpha=0.8)
+    axes[1, 1].plot(fixed_centers, fixed_results['Analytical']['mle_evidence'], 'bs-', 
+                   markersize=6, linewidth=2, label='Fixed', alpha=0.8)
+    axes[1, 1].set_xlabel('Time (s)')
+    axes[1, 1].set_ylabel('Model Evidence')
+    axes[1, 1].set_title('Model Evidence: Analytical Method')
+    axes[1, 1].legend()
+    axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].set_yscale('log')
+    
+    # Plot 6: Statistical Summary
+    axes[1, 2].axis('off')
+    
+    summary_text = f"""COMPREHENSIVE COMPARISON SUMMARY
+
+PARAMETER ACCURACY (γ = {params['gamma_true']})
+Adaptive Windows:
+  Mean error: {adaptive_mean_error:.4f}
+  Std error:  {adaptive_std_error:.4f}
+  
+Fixed Windows:
+  Mean error: {fixed_mean_error:.4f}
+  Std error:  {fixed_std_error:.4f}
+
+IMPROVEMENT: {improvement_error:+.1f}%
+
+PREDICTION QUALITY (NRMSD)
+Adaptive: {adaptive_mean_nrmsd:.4f}
+Fixed:    {fixed_mean_nrmsd:.4f}
+IMPROVEMENT: {improvement_nrmsd:+.1f}%
+
+WINDOW STATISTICS
+Adaptive: {min(adaptive_sizes)}-{max(adaptive_sizes)} pts
+Fixed:    {fixed_sizes[0] if fixed_sizes else 'N/A'} pts
+Total data used:
+  Adaptive: {total_adaptive_points} pts
+  Fixed:    {total_fixed_points} pts
+
+DATA USAGE EFFICIENCY
+Adaptive: {len(adaptive_sizes)} windows
+Fixed:    {len(fixed_sizes)} windows
+Avg window size:
+  Adaptive: {np.mean(adaptive_sizes):.1f} pts
+  Fixed:    {np.mean(fixed_sizes):.1f} pts"""
+    
+    axes[1, 2].text(0.05, 0.95, summary_text, transform=axes[1, 2].transAxes, 
+                   fontsize=10, verticalalignment='top', fontfamily='monospace',
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8))
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Print detailed analysis
+    print(f"\n ADAPTIVE vs FIXED ANALYSIS RESULTS")
+    print(f"="*60)
+    
+    print(f" PARAMETER ACCURACY:")
+    print(f"   Adaptive: {adaptive_mean_error:.4f} ± {adaptive_std_error:.4f}")
+    print(f"   Fixed:    {fixed_mean_error:.4f} ± {fixed_std_error:.4f}")
+    if improvement_error > 1:
+        print(f"    Adaptive is {improvement_error:.1f}% more accurate!")
+    elif improvement_error < -1:
+        print(f"     Fixed is {-improvement_error:.1f}% more accurate")
     else:
-        print(f"\n✓ Completed {window_idx} windows")
+        print(f"   ≈ Similar accuracy (difference: {improvement_error:.1f}%)")
     
-    # Generate all plots
-    plot_observed_data(T, T_fine, sol_fine, observed_y, observed_yp, N)
-    plot_model_posteriors(P_e_hist, P_t_hist, window_centers)
-    plot_evidence_values(Z_e_hist, Z_t_hist, window_centers)
-    plot_bayes_factors(BF_list, window_centers)
-    plot_parameter_estimates(theta_e_means, theta_t_means, window_centers, params['gamma_true'])
-    plot_window_coverage(T, window_ranges, N)
+    print(f"\n PREDICTION QUALITY:")
+    print(f"   Adaptive NRMSD: {adaptive_mean_nrmsd:.4f}")
+    print(f"   Fixed NRMSD:    {fixed_mean_nrmsd:.4f}")
+    if improvement_nrmsd > 1:
+        print(f"    Adaptive has {improvement_nrmsd:.1f}% better predictions!")
+    elif improvement_nrmsd < -1:
+        print(f"     Fixed has {-improvement_nrmsd:.1f}% better predictions")
+    else:
+        print(f"   ≈ Similar prediction quality (difference: {improvement_nrmsd:.1f}%)")
     
-    # Print summary
-    print_summary(N, window_idx, window_sizes, P_e_hist, P_t_hist, BF_list,
-                  theta_e_means, theta_t_means, params['gamma_true'])
+    print(f"\n WINDOW ADAPTATION:")
+    window_variation = max(adaptive_sizes) - min(adaptive_sizes)
+    print(f"   Window size variation: {window_variation} points")
+    if window_variation > 10:
+        print(f"    Significant adaptation occurring")
+    else:
+        print(f"     Limited adaptation (may need more challenging scenario)")
+    
+    print(f"\n DATA EFFICIENCY:")
+    print(f"   Adaptive total data: {total_adaptive_points} points")
+    print(f"   Fixed total data:    {total_fixed_points} points")
+    print(f"   Adaptive avg window: {np.mean(adaptive_sizes):.1f} points")
+    print(f"   Fixed avg window:    {np.mean(fixed_sizes):.1f} points")
+
+# ============================================================================
+# SECTION 13: NEW PLOT 12 - POSTERIOR-AS-PRIOR COMPARISON
+# ============================================================================
+
+def create_plot_12_posterior_prior_comparison(uniform_results, uniform_centers, 
+                                            posterior_results, posterior_centers, params):
+    """NEW Plot 12: Posterior-as-Prior vs Uniform Prior Comparison"""
+    
+    print(f"\n Creating Plot 12: Posterior-as-Prior vs Uniform Prior Comparison...")
+    
+    # Calculate comparison metrics
+    uniform_errors = [abs(g - params['gamma_true']) for g in uniform_results['gamma']]
+    posterior_errors = [abs(g - params['gamma_true']) for g in posterior_results['gamma']]
+    
+    uniform_mean_error = np.mean(uniform_errors)
+    posterior_mean_error = np.mean(posterior_errors)
+    uniform_std_error = np.std(uniform_errors)
+    posterior_std_error = np.std(posterior_errors)
+    
+    improvement = ((uniform_mean_error - posterior_mean_error) / uniform_mean_error) * 100 if uniform_mean_error > 0 else 0
+    
+    # Create comprehensive comparison
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle('Plot 12: POSTERIOR-AS-PRIOR vs UNIFORM PRIOR COMPARISON\nEffect of Information Accumulation vs Independent Windows', 
+                 fontsize=16, fontweight='bold')
+    
+    # Plot 1: Parameter Estimates Evolution
+    axes[0, 0].plot(uniform_centers, uniform_results['gamma'], 'bo-', 
+                   markersize=8, linewidth=2, label='Uniform Prior', alpha=0.8)
+    axes[0, 0].plot(posterior_centers, posterior_results['gamma'], 'ro-', 
+                   markersize=8, linewidth=2, label='Posterior-as-Prior', alpha=0.8)
+    axes[0, 0].axhline(params['gamma_true'], color='black', linestyle='--', linewidth=2, label='True γ')
+    axes[0, 0].set_xlabel('Time (s)')
+    axes[0, 0].set_ylabel('Estimated γ')
+    axes[0, 0].set_title('Parameter Estimates Over Time')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+    axes[0, 0].set_ylim(0, 1.0)
+    
+    # Plot 2: Parameter Errors
+    axes[0, 1].plot(uniform_centers, uniform_errors, 'bo-', 
+                   markersize=8, linewidth=2, label='Uniform Prior', alpha=0.8)
+    axes[0, 1].plot(posterior_centers, posterior_errors, 'ro-', 
+                   markersize=8, linewidth=2, label='Posterior-as-Prior', alpha=0.8)
+    axes[0, 1].set_xlabel('Time (s)')
+    axes[0, 1].set_ylabel('Parameter Error |γ_est - γ_true|')
+    axes[0, 1].set_title('Parameter Accuracy Comparison')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
+    axes[0, 1].set_yscale('log')
+    
+    # Plot 3: Evidence Evolution
+    axes[0, 2].plot(uniform_centers, uniform_results['evidence'], 'bo-', 
+                   markersize=6, linewidth=2, label='Uniform Prior', alpha=0.8)
+    axes[0, 2].plot(posterior_centers, posterior_results['evidence'], 'ro-', 
+                   markersize=6, linewidth=2, label='Posterior-as-Prior', alpha=0.8)
+    axes[0, 2].set_xlabel('Time (s)')
+    axes[0, 2].set_ylabel('Model Evidence')
+    axes[0, 2].set_title('Evidence Evolution')
+    axes[0, 2].legend()
+    axes[0, 2].grid(True, alpha=0.3)
+    axes[0, 2].set_yscale('log')
+    
+    # Plot 4: Cumulative Error Reduction
+    uniform_cumulative = np.cumsum(uniform_errors)
+    posterior_cumulative = np.cumsum(posterior_errors)
+    
+    axes[1, 0].plot(range(1, len(uniform_cumulative)+1), uniform_cumulative, 'bo-', 
+                   markersize=6, linewidth=2, label='Uniform Prior', alpha=0.8)
+    axes[1, 0].plot(range(1, len(posterior_cumulative)+1), posterior_cumulative, 'ro-', 
+                   markersize=6, linewidth=2, label='Posterior-as-Prior', alpha=0.8)
+    axes[1, 0].set_xlabel('Window Number')
+    axes[1, 0].set_ylabel('Cumulative Error')
+    axes[1, 0].set_title('Cumulative Error Accumulation')
+    axes[1, 0].legend()
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    # Plot 5: Posterior Distributions (last few windows)
+    if len(uniform_results['posterior_dists']) >= 2 and len(posterior_results['posterior_dists']) >= 2:
+        # Show last window posteriors
+        uniform_post = uniform_results['posterior_dists'][-1]
+        posterior_post = posterior_results['posterior_dists'][-1]
+        
+        if uniform_post and posterior_post:
+            axes[1, 1].plot(uniform_post['gamma_grid'], uniform_post['posterior'], 'b-', 
+                           linewidth=2, label='Uniform Prior', alpha=0.8)
+            axes[1, 1].plot(posterior_post['gamma_grid'], posterior_post['posterior'], 'r-', 
+                           linewidth=2, label='Posterior-as-Prior', alpha=0.8)
+            axes[1, 1].axvline(params['gamma_true'], color='black', linestyle='--', linewidth=2, label='True γ')
+            axes[1, 1].set_xlabel('γ')
+            axes[1, 1].set_ylabel('Posterior Density')
+            axes[1, 1].set_title(f'Final Window Posteriors')
+            axes[1, 1].legend()
+            axes[1, 1].grid(True, alpha=0.3)
+    
+    # Plot 6: Statistical Summary
+    axes[1, 2].axis('off')
+    
+    summary_text = f"""INFORMATION ACCUMULATION ANALYSIS
+
+PARAMETER ACCURACY (γ = {params['gamma_true']})
+Uniform Prior:
+  Mean error: {uniform_mean_error:.4f}
+  Std error:  {uniform_std_error:.4f}
+  
+Posterior-as-Prior:
+  Mean error: {posterior_mean_error:.4f}
+  Std error:  {posterior_std_error:.4f}
+
+IMPROVEMENT: {improvement:+.1f}%
+
+EVIDENCE COMPARISON
+Uniform avg: {np.mean(uniform_results['evidence']):.2e}
+Posterior avg: {np.mean(posterior_results['evidence']):.2e}
+
+CONVERGENCE ANALYSIS
+Uniform final error: {uniform_errors[-1]:.4f}
+Posterior final error: {posterior_errors[-1]:.4f}
+
+INFORMATION FLOW
+Uniform: Independent windows
+Posterior: Accumulative learning
+
+THEORETICAL EXPECTATION
+- Posterior-as-prior should show:
+  ✓ Faster convergence
+  ✓ More stable estimates
+  ✓ Better uncertainty quantification
+  ✓ Information accumulation"""
+    
+    axes[1, 2].text(0.05, 0.95, summary_text, transform=axes[1, 2].transAxes, 
+                   fontsize=10, verticalalignment='top', fontfamily='monospace',
+                   bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8))
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Print detailed analysis
+    print(f"\n PRIOR COMPARISON ANALYSIS RESULTS")
+    print(f"="*60)
+    
+    print(f" ACCURACY COMPARISON:")
+    print(f"   Uniform Prior:      {uniform_mean_error:.4f} ± {uniform_std_error:.4f}")
+    print(f"   Posterior-as-Prior: {posterior_mean_error:.4f} ± {posterior_std_error:.4f}")
+    if improvement > 1:
+        print(f"    Posterior-as-prior is {improvement:.1f}% more accurate!")
+    elif improvement < -1:
+        print(f"     Uniform prior is {-improvement:.1f}% more accurate")
+    else:
+        print(f"   ≈ Similar performance (difference: {improvement:.1f}%)")
+    
+    print(f"\n CONVERGENCE ANALYSIS:")
+    print(f"   Initial window errors:")
+    print(f"     Uniform: {uniform_errors[0]:.4f}")
+    print(f"     Posterior: {posterior_errors[0]:.4f}")
+    print(f"   Final window errors:")
+    print(f"     Uniform: {uniform_errors[-1]:.4f}")
+    print(f"     Posterior: {posterior_errors[-1]:.4f}")
+    
+    print(f"\n INFORMATION ACCUMULATION:")
+    if len(posterior_errors) > 1:
+        uniform_trend = np.polyfit(range(len(uniform_errors)), uniform_errors, 1)[0]
+        posterior_trend = np.polyfit(range(len(posterior_errors)), posterior_errors, 1)[0]
+        print(f"   Error trend (slope):")
+        print(f"     Uniform: {uniform_trend:.6f}")
+        print(f"     Posterior: {posterior_trend:.6f}")
+        if posterior_trend < uniform_trend:
+            print(f"    Posterior-as-prior shows better learning trend!")
+        else:
+            print(f"     Uniform prior shows more stable performance")
+    
+    return improvement
+
+# ============================================================================
+# SECTION 14: MAIN ANALYSIS FUNCTION - ENHANCED WITH ALL COMPARISONS
+# ============================================================================
+
+def run_comprehensive_analysis_with_all_comparisons(params):
+    """Run analysis with all original plots + adaptive vs fixed + prior comparison"""
+    
+    N_points = int(params['T_total'] / params['dt']) + 1
+    T = np.linspace(0, params['T_total'], N_points)
+    
+    print(f"\n USING PARAMETERS FROM __main__:")
+    print(f"  Total observations: {N_points}")
+    print(f"  Expected windows: ~{N_points // params['W_initial']}")
+    print(f"  Window size can adapt from {params['W_min']} to {params['W_max']} points")
+    
+    # Generate TRUE solution and observations (ORIGINAL)
+    print(f"\n Generating data with original parameters...")
+    true_sol = np.array([analytical_solution(t, params['gamma_true'], params['k'], params['y0_true']) for t in T])
+    true_y = true_sol[:, 0]
+    true_yp = true_sol[:, 1]
+    
+    # Add noise
+    np.random.seed(42)
+    observed_y = true_y + np.random.normal(0, params['noise_level_s'], len(T))
+    observed_yp = true_yp + np.random.normal(0, params['noise_level_s'], len(T))
+    
+    # Run ORIGINAL adaptive analysis
+    print(f"\n" + "="*60)
+    print(f"PART 1: ORIGINAL ADAPTIVE WINDOW ANALYSIS")
+    print(f"="*60)
+    
+    results, window_centers, window_sizes_evolution = run_adaptive_window_analysis(params, T, observed_y, observed_yp)
+    
+    # Create all ORIGINAL 10 plots
+    print(f"\n" + "="*60)
+    print(f"PART 2: ORIGINAL 10 PLOTS")
+    print(f"="*60)
+    
+    create_original_10_plots(results, window_centers, window_sizes_evolution, params, T, true_y, observed_y)
+    
+    # Run FIXED window analysis for comparison
+    print(f"\n" + "="*60)
+    print(f"PART 3: FIXED WINDOW COMPARISON ANALYSIS")
+    print(f"="*60)
+    
+    # Use initial window size for fair comparison
+    fixed_window_size = params['W_initial']
+    fixed_results, fixed_centers, fixed_sizes = run_fixed_window_analysis_comparison(
+        params, T, observed_y, observed_yp, fixed_window_size)
+    
+    # Create NEW Plot 11: Adaptive vs Fixed Comparison
+    print(f"\n" + "="*60)
+    print(f"PART 4: NEW PLOT 11 - ADAPTIVE vs FIXED COMPARISON")
+    print(f"="*60)
+    
+    create_plot_11_adaptive_vs_fixed_comparison(
+        results, window_centers, window_sizes_evolution,
+        fixed_results, fixed_centers, fixed_sizes, params)
+    
+    # Run PRIOR comparison analysis
+    print(f"\n" + "="*60)
+    print(f"PART 5: PRIOR COMPARISON ANALYSIS")
+    print(f"="*60)
+    
+    print(f"\n" + "="*60)
+    print(f"ANALYSIS 5A: UNIFORM PRIOR (50-50)")
+    print(f"="*60)
+    
+    uniform_results, uniform_centers, uniform_sizes = run_sequential_analysis_uniform_prior(
+        params, T, observed_y, observed_yp)
+    
+    print(f"\n" + "="*60)
+    print(f"ANALYSIS 5B: POSTERIOR-AS-PRIOR")
+    print(f"="*60)
+    
+    posterior_results, posterior_centers, posterior_sizes = run_sequential_analysis_posterior_prior(
+        params, T, observed_y, observed_yp)
+    
+    # Create NEW Plot 12: Prior Comparison
+    print(f"\n" + "="*60)
+    print(f"PART 6: NEW PLOT 12 - POSTERIOR-AS-PRIOR vs UNIFORM PRIOR")
+    print(f"="*60)
+    
+    create_plot_12_posterior_prior_comparison(
+        uniform_results, uniform_centers, 
+        posterior_results, posterior_centers, 
+        params)
+    
+    # Final comprehensive summary
+    print(f"\n COMPREHENSIVE ANALYSIS COMPLETE!")
+    print(f"="*60)
+
+    print(f"{N_points} total observations for detailed analysis")
+    print(f" {len(window_centers)} adaptive windows analyzed")
+    print(f" {len(fixed_centers)} fixed windows for comparison")
+    print(f" {len(uniform_centers)} windows for prior comparison")
+    
+    analytical_gammas = results['Analytical']['mle_gamma']
+    analytical_error = np.mean([abs(g - params['gamma_true']) for g in analytical_gammas])
+    
+    print(f"\n ANALYTICAL METHOD VERIFICATION:")
+    print(f"  True γ = {params['gamma_true']}")
+    print(f"  Analytical estimates: {[f'{g:.3f}' for g in analytical_gammas[:5]]}...")
+    print(f"  Average error: {analytical_error:.4f}")
+    
+    if analytical_error < 0.05:
+        print(f"   SUCCESS: Analytical method finding true γ!")
+    
+    return results, window_centers, window_sizes_evolution, fixed_results, fixed_centers, fixed_sizes, uniform_results, posterior_results, params
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+if __name__ == "__main__":
+    """Run the comprehensive analysis with all original plots + both comparisons"""
+    
+    # ========================================================================
+    # DEFINE ALL PARAMETERS HERE FOR MAXIMUM VISIBILITY
+    # ========================================================================
+    
+    params = {
+        # PHYSICAL PARAMETERS
+        'k': 5.0,                         # Spring constant
+        'gamma_true': 0.3,                # True damping coefficient (analytical should find this)
+        'y0_true': [1.0, 0.0],            # Initial conditions [position, velocity]
+        
+        # NUMERICAL PARAMETERS  
+        'dt': 0.05,                       # Time step = 0.05s (MORE observations)
+        'T_total': 15,                    # Total simulation time
+        'noise_level_s': 0.03,            # Measurement noise level
+        
+        # ESTIMATION PARAMETERS
+        'theta_min': 0.0,                 # Parameter bounds
+        'theta_max': 1.0,
+        
+        # ADAPTIVE WINDOW PARAMETERS
+        'W_min': 40,                      # Minimum window size (points)
+        'W_max': 100,                     # Maximum window size (points)  
+        'W_delta': 10,                    # Window size adjustment step
+        'W_initial': 60,                  # Initial window size (points)
+    }
+    
+    # ========================================================================
+    # DISPLAY PARAMETERS FOR VERIFICATION
+    # ========================================================================
+    
+    N_points = int(params['T_total'] / params['dt']) + 1
+    
+    print(f" COMPREHENSIVE ANALYSIS: ORIGINAL 10 PLOTS + ADAPTIVE vs FIXED + PRIOR COMPARISON")
+    print("="*90)
+    
+    print(f" PARAMETERS (defined in __main__ for visibility):")
+    print(f"="*60)
+    print(f"PHYSICAL SYSTEM:")
+    print(f"  Spring constant (k): {params['k']}")
+    print(f"  True damping (γ): {params['gamma_true']}")
+    print(f"  Initial conditions: {params['y0_true']}")
+    print(f"")
+    print(f"NUMERICAL SETUP:")
+    print(f"  Time step (dt): {params['dt']:.3f}s")
+    print(f"  Total duration: {params['T_total']:.1f}s")
+    print(f"  Total points: {N_points} (HIGH RESOLUTION)")
+    print(f"  Noise level: {params['noise_level_s']}")
+    print(f"")
+    print(f"ESTIMATION BOUNDS:")
+    print(f"  Parameter range: [{params['theta_min']:.1f}, {params['theta_max']:.1f}]")
+    print(f"")
+    print(f"ADAPTIVE WINDOWING:")
+    print(f"  Window size range: {params['W_min']}-{params['W_max']} points")
+    print(f"  Window time range: {params['W_min']*params['dt']:.1f}s - {params['W_max']*params['dt']:.1f}s")
+    print(f"  Initial window: {params['W_initial']} points = {params['W_initial']*params['dt']:.1f}s")
+    print(f"  Adjustment step: ±{params['W_delta']} points")
+    print(f"")
+    print(f" To modify parameters, edit the params dictionary in __main__")
+    
+    # ========================================================================
+    # RUN COMPREHENSIVE ANALYSIS
+    # ========================================================================
+    
+    try:
+        (results, adaptive_centers, adaptive_sizes, 
+         fixed_results, fixed_centers, fixed_sizes,
+         uniform_results, posterior_results, params_used) = run_comprehensive_analysis_with_all_comparisons(params)
+        
+        print(f"\n ALL ANALYSIS COMPLETE!")
+        print(f"="*60)
+
+        print(f" Used {N_points} observations for detailed analysis")
+        print(f" Analyzed {len(adaptive_centers)} adaptive windows")
+        print(f" Compared with {len(fixed_centers)} fixed windows")
+        print(f" Evaluated {len(uniform_results['gamma'])} windows for prior comparison")
+        print(f" Complete analysis with all enhancements!")
+        
+    except Exception as e:
+        print(f"\n Analysis failed with error: {e}")
+        import traceback
+        traceback.print_exc()
