@@ -32,38 +32,36 @@ def damped_oscillator(t, y, gamma, k):
 
 def analytical_solution(t, gamma, k, y0):
     """
-    Computes the analytical solution of the damped harmonic oscillator.
-    
+    Simulates the damped oscillator system over a given time span using solve_ivp.
+
     Inputs:
-      t: Float or array of floats, time point(s) at which to evaluate.
       gamma: Float, damping coefficient.
-      k: Float, spring constant.
-      y0: Sequence [position₀, velocity₀], initial conditions.
-    
+      k: Float, stiffness coefficient.
+      initial_conditions: List, initial state of the system.
+      ts: List, time span for simulation .
+      N: Integer, number of points to evaluate in the time span.
+      smooth_noise_level: number, level of random noise in the first half (smooth phase).
+      jumpy_noise_level: number, level of random noise in the second half (jumpy phase).
     Outputs:
-      sol: 2×M array, where
-        sol[0, i] = position at t[i],
-        sol[1, i] = velocity at t[i].
+      (y, yp): list, where y is the position array and yp is the velocity array over the time span.
     """
-    omega0 = np.sqrt(k)
-    zeta = gamma / (2 * omega0)
+    if np.isscalar(t):
+        t_eval = [t]
+        return_scalar = True
+    else:
+        t_eval = [t] if isinstance(t, (int, float)) else t
+        return_scalar = False
+    sol = scipy.integrate.solve_ivp(damped_oscillator, [0, max(t_eval)+ 0.1], y0, args=(gamma, k), t_eval=t_eval,method='RK45',rtol=1e-9, atol=1e-12)
     
-    if zeta < 1:  # Underdamped case (our case)
-        omega_d = omega0 * np.sqrt(1 - zeta**2)
-        A = y0[0]  # Initial position
-        B = (y0[1] + zeta * omega0 * y0[0]) / omega_d  # Modified initial velocity
-        
-        position = np.exp(-zeta * omega0 * t) * (A * np.cos(omega_d * t) + B * np.sin(omega_d * t))
-        velocity = np.exp(-zeta * omega0 * t) * (
-            (-zeta * omega0 * A + omega_d * B) * np.cos(omega_d * t) + 
-            (-zeta * omega0 * B - omega_d * A) * np.sin(omega_d * t)
-        )
-        
-        return np.array([position, velocity])
-    else:  # Overdamped/critically damped
-        position = y0[0] * np.exp(-gamma * t / 2)
-        velocity = -gamma * position / 2
-        return np.array([position, velocity])
+    position = sol.y[0]
+    velocity = sol.y[1]
+
+    if return_scalar:
+        return np.array([position[0], velocity[0]])
+    else:
+        return np.array([position, velocity])    
+    
+
 
 def euler_series(gamma, k, y0, t_grid):
     """
