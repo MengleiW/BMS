@@ -631,7 +631,7 @@ def run_simple_analysis():
     
     plt.xlabel('Time', fontsize=12)
     plt.ylabel('Position', fontsize=12)
-    plt.title('Vanilla ABC (with joint ε schedule)', fontsize=14)
+    plt.title('Vinalla ABC (with joint ε schedule)', fontsize=14)
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -651,7 +651,7 @@ def run_simple_analysis():
     
     plt.xlabel('Time', fontsize=12)
     plt.ylabel('Position', fontsize=12)
-    plt.title('Vanilla MLE', fontsize=14)
+    plt.title('Vinalla LAplase-MLE', fontsize=14)
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -661,18 +661,18 @@ def run_simple_analysis():
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
     
     # (a) Evidence (MLE)
-    ax1.step(t, evidence_euler_full, where='post', color='blue', label='Euler (MLE)')
-    ax1.step(t, evidence_trap_full, where='post', color='red', label='Trap (MLE)')
+    ax1.step(t, evidence_euler_full, where='post', color='blue', label='Euler (Laplace)')
+    ax1.step(t, evidence_trap_full, where='post', color='red', label='Trap (Laplace)')
     ax1.set_yscale('log')
     ax1.set_xlabel('Time (s)')
     ax1.set_ylabel('Model evidence (1/L2 norm)')
-    ax1.set_title('(a) Evidence — MLE')
+    ax1.set_title('(a) Evidence — Laplace')
     ax1.legend()
     ax1.grid(True, which='both', alpha=0.3)
     
     # (b) Bayes factor (MLE)
     bf_mle = evidence_trap_full / evidence_euler_full
-    ax2.step(t, bf_mle, where='post', color='purple', label='Trap/Euler (MLE)')
+    ax2.step(t, bf_mle, where='post', color='purple', label='Trap/Euler (Laplace)')
     ax2.axhline(1.0, color='gray', ls='--', alpha=0.6)
     ax2.set_yscale('log')
     ax2.set_xlabel('Time (s)')
@@ -681,7 +681,7 @@ def run_simple_analysis():
     ax2.legend()
     ax2.grid(True, which='both', alpha=0.3)
     
-    plt.suptitle('Figure 3 — MLE: Evidence (L2 norm) & Bayes factor')
+    plt.suptitle('Laplace with MLE: Evidence (L2 norm) & Bayes factor')
     plt.tight_layout()
     plt.show()
     
@@ -709,7 +709,7 @@ def run_simple_analysis():
     ax2.legend()
     ax2.grid(True, which='both', alpha=0.3)
     
-    plt.suptitle('Figure 4 — ABC-SMC: Evidence & Bayes factor (joint ε schedule)')
+    plt.suptitle('  ABC-SMC: Evidence & Bayes factor (joint ε schedule)')
     plt.tight_layout()
     plt.show()
     
