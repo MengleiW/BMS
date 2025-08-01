@@ -9,7 +9,7 @@ from scipy.optimize import minimize_scalar, minimize
 from scipy.integrate import simpson
 from scipy.interpolate import interp1d
 from numpy.linalg import inv
-
+from scipy.stats import norm
 def damped_oscillator(t, y, gamma, k):
     """
     Models a damped oscillator system.
@@ -147,7 +147,7 @@ def compute_log_likelihood(gamma, method, k, t_window,
 
     return np.clip(total_ll, -1e6, 1e6) if np.isfinite(total_ll) else -1e6
 
-def estimate_gamma_mle(method, k, t_window, y_obs, yp_obs, noise_level, bounds=(0.01, 0.99), prior_center=None, fisher_prior=0.0):
+def estimate_gamma_map(method, k, t_window, y_obs, yp_obs, noise_level, bounds=(0.01, 0.99), prior_center=None, fisher_prior=0.0):
     """Estimate MAP (if prior_center provided) or MLE otherwise."""
     def log_post(g):
         log_lik = compute_log_likelihood(g, method, k, t_window, y_obs, yp_obs, noise_level)
@@ -178,7 +178,7 @@ def compute_model_evidence(method, k, t_window, y_obs, yp_obs, noise_level,
     """
     Estimate MAP and compute model evidence using Laplace approximation.
     """
-    gamma_map, log_post = estimate_gamma_mle(
+    gamma_map, log_post = estimate_gamma_map(
         method, k, t_window, y_obs, yp_obs, noise_level, bounds, prior_center, fisher_prior
     )
 
@@ -259,12 +259,11 @@ def abc_smc_estimation(method, k, t_window, y_obs, yp_obs,
                        prior_particles=None, prior_weights=None):
     """
     Adaptive ABC–SMC for the damping γ parameter.
-    Returns: gamma_mean, gamma_std, evidence_proxy, particles_last
+    Returns: gamma_mean, evidence_proxy, particles_last, weights_last
     """
     rng = np.random.default_rng()
     particles = np.zeros((num_generations, num_particles))
     weights = np.zeros_like(particles)
-    distances = np.zeros(num_particles)
     
     y0 = np.array([y_obs[0], yp_obs[0]])
     obs_vec = np.vstack([y_obs, yp_obs])
@@ -277,7 +276,7 @@ def abc_smc_estimation(method, k, t_window, y_obs, yp_obs,
     prev_actual_particles = num_particles
 
     for t in range(num_generations):
-        eps_t = eps_schedule[min(t, len(eps_schedule)-1)]
+        eps_t = eps_schedule[min(t, len(eps_schedule) - 1)]
         if verbose:
             print(f"[ABC-{method}] Gen {t+1}/{num_generations}, ε = {eps_t:.3f}")
         
@@ -285,14 +284,20 @@ def abc_smc_estimation(method, k, t_window, y_obs, yp_obs,
         attempts = 0
         temp_particles, temp_distances = [], []
 
-        # Setup proposal if not generation 0
         if t > 0:
             prev_particles = particles[t-1, :prev_actual_particles]
             prev_weights = weights[t-1, :prev_actual_particles]
-            prev_weights = prev_weights / np.sum(prev_weights)
+
+            weight_sum = np.sum(prev_weights)
+            if weight_sum <= 1e-12:
+                if verbose:
+                    print(f"[ABC-{method}] WARNING: degenerate weights in generation {t}, falling back to uniform.")
+                prev_weights = np.ones_like(prev_particles) / len(prev_particles)
+            else:
+                prev_weights = prev_weights / weight_sum
 
             weighted_mean = np.average(prev_particles, weights=prev_weights)
-            weighted_var = np.average((prev_particles - weighted_mean)**2, weights=prev_weights)
+            weighted_var = np.average((prev_particles - weighted_mean) ** 2, weights=prev_weights)
             sigma = max(0.01, 0.10 * np.sqrt(weighted_var))
 
         while acc < num_particles and total_attempts < max_total_attempts:
@@ -303,82 +308,76 @@ def abc_smc_estimation(method, k, t_window, y_obs, yp_obs,
                 if prior_particles is not None and prior_weights is not None:
                     g_proposed = rng.choice(prior_particles, p=prior_weights)
                 else:
-                    g_proposed = np.random.uniform(bounds[0] + 0.05, bounds[1] - 0.05)
+                    g_proposed = rng.uniform(bounds[0] + 0.05, bounds[1] - 0.05)
             else:
                 idx = rng.choice(prev_actual_particles, p=prev_weights)
                 g_center = prev_particles[idx]
                 g_proposed = np.clip(g_center + rng.normal(0, sigma),
                                      bounds[0] + 0.05, bounds[1] - 0.05)
 
-            # Simulate and distance
+            # Simulate
             if method == 'euler':
                 sim = euler_series(g_proposed, k, y0, t_window)
             elif method == 'trapezoidal':
                 sim = trapezoidal_series(g_proposed, k, y0, t_window)
             else:
-                raise ValueError("unknown method")
-            dist = np.linalg.norm(obs_vec - sim)
+                raise ValueError("Unknown method")
 
+            if sim is None:
+                continue
+
+            dist = np.linalg.norm(obs_vec - sim)
             if dist <= eps_t:
                 temp_particles.append(g_proposed)
                 temp_distances.append(dist)
                 acc += 1
 
-            if acc == 0:
-                if verbose:
-                    print(f"[ABC-{method}] WARNING: No particles accepted!")
-                if t == 0:
-                    return 0.3, 1e-10, np.array([0.3]), np.array([1.0]) 
-            else:
-                actual_particles = prev_actual_particles
-                particles[t, :actual_particles] = particles[t-1, :actual_particles]
-                weights[t, :actual_particles] = weights[t-1, :actual_particles]
-                continue
+        if acc == 0:
+            if verbose:
+                print(f"[ABC-{method}] ERROR: No particles accepted in generation {t}.")
+            return 0.3, 1e-10, np.array([0.3]), np.array([1.0])
 
-        if t == 0:
-            prev_actual_particles = acc
+        # Save accepted particles
         actual_particles = acc
-
         for i in range(acc):
             particles[t, i] = temp_particles[i]
-            distances[i] = temp_distances[i]
 
         if t == 0:
             weights[t, :acc] = 1.0 / acc
         else:
             temp_weights = np.zeros(acc)
             for j in range(acc):
-                kernel_vals = np.exp(-0.5 * ((particles[t, j] - prev_particles) / sigma)**2)
+                kernel_vals = np.exp(-0.5 * ((particles[t, j] - prev_particles) / sigma) ** 2)
                 denom = np.sum(prev_weights * kernel_vals)
                 temp_weights[j] = 1.0 / max(denom, 1e-12)
+
             weight_sum = np.sum(temp_weights)
             if weight_sum > 0:
                 weights[t, :acc] = temp_weights / weight_sum
             else:
-                weights[t, :acc] = np.ones(acc) / acc if acc > 0 else np.zeros(acc)
-
+                weights[t, :acc] = np.ones(acc) / acc
 
         prev_actual_particles = acc
 
-        if verbose and attempts > 0:
+        if verbose:
             ar = acc / attempts
             print(f"[ABC-{method}] Accepted {acc}/{attempts} (rate: {ar:.3g})")
-    
-    final_particles = particles[num_generations-1, :actual_particles]
-    final_weights = weights[num_generations-1, :actual_particles]
-    final_weights /= max(np.sum(final_weights), 1e-12)
+
+    # Final posterior summary
+    final_particles = particles[num_generations - 1, :actual_particles]
+    final_weights = weights[num_generations - 1, :actual_particles]
 
     weight_sum = np.sum(final_weights)
     if weight_sum <= 1e-12:
-        print(f"[ABC-{method}] WARNING: weight sum is zero or too small. Falling back to unweighted mean.")
-        g_mean = np.mean(final_particles) if len(final_particles) > 0 else 0.3
-        g_std = np.std(final_particles) if len(final_particles) > 1 else 0.1
-        final_weights = np.ones_like(final_particles) / max(len(final_particles), 1)
+        if verbose:
+            print(f"[ABC-{method}] WARNING: Final weights degenerate. Using uniform fallback.")
+        final_weights = np.ones_like(final_particles) / len(final_particles)
     else:
-        g_mean = np.average(final_particles, weights=final_weights)
-        g_std = np.sqrt(np.average((final_particles - g_mean)**2, weights=final_weights))
+        final_weights /= weight_sum
 
-    evidence = (actual_particles / max(total_attempts, 1)) / eps_schedule[-1]
+    g_mean = np.average(final_particles, weights=final_weights)
+    g_std = np.sqrt(np.average((final_particles - g_mean) ** 2, weights=final_weights))
+    evidence = max((actual_particles / max(total_attempts, 1)) / eps_schedule[-1], 1e-12)
 
     if verbose:
         print(f"[ABC-{method}] Done. γ = {g_mean:.3f} ± {g_std:.3f}, evidence ≈ {evidence:.3e}")
@@ -437,7 +436,8 @@ def extended_kalman_filter(y_obs, yp_obs, gamma_ekf, k, dt=0.5, R_scale=0.01, Q_
         y_pred = H @ x_pred
         S = H @ P_pred @ H.T + R
         K = P_pred @ H.T @ np.linalg.inv(S)
-
+        if np.linalg.norm(K) < 1e-5:
+            print("Warning: Kalman gain ~0 → no update in EKF!")
         # Update
         x = x_pred + K @ (y_meas - y_pred)
         P = (np.eye(2) - K @ H) @ P_pred
@@ -446,9 +446,10 @@ def extended_kalman_filter(y_obs, yp_obs, gamma_ekf, k, dt=0.5, R_scale=0.01, Q_
         P_filtered[:, :, t] = P      #State covariance
 
     return x_filtered, P_filtered
-def adapt_window_size(observed_y, predicted_y, current_window_size, W_min=4, W_max=20, delta_s=2, epsilon_r_prev=None):
+def adapt_window_size(observed_y, predicted_y, current_window_size,
+                      W_min=4, W_max=20, delta_s=2, epsilon_r_prev=None, lambda_penalty=0.2):
     """
-    Adapt the time window size based on the NRMSD between observed and predicted values.
+    Adapt the time window size based on the penalized NRMSD between observed and predicted values.
 
     Parameters
     ----------
@@ -458,21 +459,23 @@ def adapt_window_size(observed_y, predicted_y, current_window_size, W_min=4, W_m
         Model-predicted values for the current window.
     current_window_size : int
         Current time window size (in time steps).
-    W_min : int, optional
-        Minimum allowed window size, by default 4.
-    W_max : int, optional
-        Maximum allowed window size, by default 20.
-    delta_s : int, optional
-        Step size to increase or decrease the window, by default 2.
-    epsilon_r_prev : float or None, optional
-        Previous NRMSD value to compare against.
+    W_min : int
+        Minimum allowed window size.
+    W_max : int
+        Maximum allowed window size.
+    delta_s : int
+        Amount by which to increase or decrease window size.
+    epsilon_r_prev : float or None
+        Previous penalized NRMSD (for comparison).
+    lambda_penalty : float
+        Weight for window size penalty (recommended: 0.1–0.5)
 
     Returns
     -------
     new_window_size : int
         Updated window size.
     new_epsilon_r : float
-        NRMSD value for the current window.
+        Penalized NRMSD.
     """
     observed_y = np.asarray(observed_y)
     predicted_y = np.asarray(predicted_y)
@@ -480,24 +483,58 @@ def adapt_window_size(observed_y, predicted_y, current_window_size, W_min=4, W_m
     if len(observed_y) != len(predicted_y):
         raise ValueError("Observed and predicted arrays must be the same length.")
 
-    # Compute NRMSD
+    # Compute raw NRMSD
     error = observed_y - predicted_y
     rmse = np.sqrt(np.mean(error ** 2))
     y_range = np.max(observed_y) - np.min(observed_y)
-    if y_range == 0:
-        epsilon_r = 0.0
-    else:
-        epsilon_r = rmse / y_range
+    epsilon_r = rmse / y_range if y_range != 0 else 0.0
 
-    # Adjust window size
+    # Apply penalty for longer windows
+    penalty = lambda_penalty * (current_window_size / W_max)
+    epsilon_r_adj = epsilon_r + penalty
+
+    # Adapt window size based on penalized error
     if epsilon_r_prev is None:
         new_window_size = current_window_size
-    elif epsilon_r > epsilon_r_prev:
-        new_window_size = min(current_window_size + delta_s, W_max)
+    elif epsilon_r_adj > epsilon_r_prev:
+        new_window_size = max(W_min, current_window_size - delta_s)
     else:
-        new_window_size = max(current_window_size - delta_s, W_min)
+        new_window_size = min(W_max, current_window_size + delta_s)
 
-    return new_window_size, epsilon_r
+    return new_window_size, epsilon_r_adj
+
+def direct_marginal_likelihood(gamma_hat, k, y0, t_window, y_obs, yp_obs, noise_std, bounds=(0.01, 0.99)):
+    """
+    Compute marginal likelihood Z = ∫ p(y | γ) p(γ) dγ using exact solution and uniform prior.
+    No inner function or particles — pure direct integration.
+    """
+    gamma_grid = np.linspace(bounds[0], bounds[1], 100)
+
+    total_Z = 0.0
+    for i in range(len(gamma_grid) - 1):
+        gamma_left = gamma_grid[i]
+        gamma_right = gamma_grid[i+1]
+        gamma_mid = 0.5 * (gamma_left + gamma_right)
+
+        try:
+            sol = Solution(t_window, gamma_mid, k, y0)
+            y_pred = sol[0, :]
+            yp_pred = sol[1, :]
+        except Exception:
+            continue
+
+        log_p_y = norm.logpdf(y_obs, loc=y_pred, scale=noise_std)
+        log_p_yp = norm.logpdf(yp_obs, loc=yp_pred, scale=noise_std)
+        log_likelihood = np.sum(log_p_y + log_p_yp)
+
+        # Uniform prior density
+        log_prior = -np.log(bounds[1] - bounds[0])
+        log_weight = log_likelihood + log_prior
+
+        Z_piece = np.exp(log_weight) * (gamma_right - gamma_left)
+        total_Z += Z_piece
+
+    return total_Z
 
 
 def run_simple_analysis():
@@ -542,6 +579,8 @@ def run_simple_analysis():
     abc_gamma_trap = []
     abc_evidence_eu = []
     abc_evidence_tr = []
+    direct_evidence=[]
+    direct_evidence_full = np.zeros_like(t) 
     prior_center_euler, fisher_euler = None, 0.0
     prior_center_trap, fisher_trap = None, 0.0
     prev_particles_euler, prev_weights_euler = None, None
@@ -568,27 +607,33 @@ def run_simple_analysis():
     # Process each window
     i = 0
     start_idx = 0
+    epsilon_r_prev = None
+    current_window_size = window_size  # initialize
+    window_bounds = []
+    
+    
+    
     while start_idx + 2 <= len(t):
-
-        end_idx = start_idx + window_size + 1
-
+        if start_idx + current_window_size + 1 > len(t):
+            current_window_size = len(t) - start_idx - 1
+        end_idx = start_idx + current_window_size + 1
+        window_bounds.append((start_idx, end_idx))
         
-        if end_idx > len(t):
-            break
-        
+       
+       
+    
         # Extract window data
         t_window = t[start_idx:end_idx]
         y_window = observed_y[start_idx:end_idx]
         yp_window = observed_yp[start_idx:end_idx]
-        
-        # Make t_window relative to start of window
         t_window_rel = t_window - t_window[0]
-        
+    
         window_center = np.mean(t_window)
         window_centers.append(window_center)
-        
-        print(f"Window {i+1}: t = {t_window[0]:.1f}s to {t_window[-1]:.1f}s")
-        
+    
+        print(f"Window {i+1}: t = {t[start_idx]:.1f}s to {t[start_idx] + current_window_size * dt:.1f}s (W = {current_window_size})")
+    
+            
         # Estimate parameters for each method
         # Euler method
         gamma_euler, evidence_euler_i, fisher_euler = compute_model_evidence(
@@ -632,7 +677,7 @@ def run_simple_analysis():
             k, t_window_rel, y_window, yp_window,
             bounds=(0.01, 0.99),
             num_samples=200,
-            quantiles=[80, 60, 40]  # Three-stage ladder
+            quantiles=[50, 30, 20]  # Three-stage ladder
         )
         print(f"  Joint ε schedule: {eps_schedule}")
         
@@ -665,7 +710,7 @@ def run_simple_analysis():
             prior_weights=prev_weights_trap
         )
         g_tr_abc,  Z_tr_abc, final_particles_tr, final_weights_tr = res_tr
-
+        
         
         # Update prior for next window
         prev_particles_trap = final_particles_tr
@@ -706,7 +751,17 @@ def run_simple_analysis():
 
         x0_ekf_next = x_filtered[:, -1]  # store for next window
         
-        
+        Z_direct = direct_marginal_likelihood(
+            gamma_hat=gamma_ekf,
+            k=k,
+            y0=y0_window,
+            t_window=t_window_rel,
+            y_obs=y_window,
+            yp_obs=yp_window,
+            noise_std=noise_level
+        )
+        print(f"  Direct Evidence (uniform prior): {Z_direct:.3e}")
+        direct_evidence.append(Z_direct)
         
         
         #time window
@@ -739,9 +794,11 @@ def run_simple_analysis():
             epsilon_r_prev=epsilon_r_prev
         )
 
-
         window_size = new_window_size
-        start_idx += window_size
+        current_window_size = new_window_size
+        start_idx = end_idx - 1
+        print(f"[Adapt] ε_r = {epsilon_r_prev:.4f}, new window size = {window_size}")
+
         i += 1
                 
         
@@ -754,6 +811,11 @@ def run_simple_analysis():
     evidence_trap_full = np.zeros_like(t)
     bayes_full = np.zeros_like(t)
     
+    
+    for i, (s, e) in enumerate(window_bounds):
+        direct_evidence_full[s:e] = direct_evidence[i]
+        
+        
     for i in range(len(euler_evidence)):
         s = sum([window_size_seconds] * i) // dt  # cumulative start index
         e = s + window_size + 1
@@ -770,13 +832,7 @@ def run_simple_analysis():
     abc_evidence_eu_full = np.zeros_like(t, dtype=float)
     abc_evidence_tr_full = np.zeros_like(t, dtype=float)
     
-    for i in range(len(abc_evidence_eu)):
-        s = int(i * window_size)
-
-        e = int(s + window_size + 1)
-
-        if e > len(t):
-            e = len(t)
+    for i, (s, e) in enumerate(window_bounds):
         abc_evidence_eu_full[s:e] = abc_evidence_eu[i]
         abc_evidence_tr_full[s:e] = abc_evidence_tr[i]
 
@@ -798,7 +854,7 @@ def run_simple_analysis():
     
     plt.xlabel('Time', fontsize=12)
     plt.ylabel('Position', fontsize=12)
-    plt.title('Vanilla ABC (with joint ε schedule)', fontsize=14)
+    plt.title('adptive ABC (with joint ε schedule)', fontsize=14)
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -818,7 +874,7 @@ def run_simple_analysis():
     
     plt.xlabel('Time', fontsize=12)
     plt.ylabel('Position', fontsize=12)
-    plt.title('Vanilla MLE', fontsize=14)
+    plt.title('adptive Laplace', fontsize=14)
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -828,36 +884,56 @@ def run_simple_analysis():
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
     
     # (a) Evidence (MLE)
-    ax1.step(t, evidence_euler_full, where='post', color='blue', label='Euler (MLE)')
-    ax1.step(t, evidence_trap_full, where='post', color='red', label='Trap (MLE)')
+    ax1.step(t, evidence_euler_full, where='post', color='blue', label='Euler (Laplace)')
+    ax1.step(t, evidence_trap_full, where='post', color='red', label='Trap (MLaplace)')
+    ax1.step(t, direct_evidence_full, where='post', color='black', ls='-', label='Direct (Uniform Prior)')
+
     ax1.set_yscale('log')
     ax1.set_xlabel('Time (s)')
     ax1.set_ylabel('Model evidence (1/L2 norm)')
-    ax1.set_title('(a) Evidence — MLE')
+    ax1.set_title('(a) Evidence — Laplace')
     ax1.legend()
     ax1.grid(True, which='both', alpha=0.3)
     
     # (b) Bayes factor (MLE)
     bf_mle = evidence_trap_full / evidence_euler_full
-    ax2.step(t, bf_mle, where='post', color='purple', label='Trap/Euler (MLE)')
+    ax2.step(t, bf_mle, where='post', color='purple', label='Trap/Euler (Laplace)')
     ax2.axhline(1.0, color='gray', ls='--', alpha=0.6)
     ax2.set_yscale('log')
     ax2.set_xlabel('Time (s)')
     ax2.set_ylabel('Bayes factor')
-    ax2.set_title('(b) Bayes factor — MLE')
+    ax2.set_title('(b) Bayes factor —Laplace')
     ax2.legend()
     ax2.grid(True, which='both', alpha=0.3)
     
-    plt.suptitle('Figure 3 — MLE: Evidence (L2 norm) & Bayes factor')
+    plt.suptitle('Figure 3 —  Laplace: Evidence (L2 norm) & Bayes factor')
     plt.tight_layout()
     plt.show()
     
     # Figure 4 — ABC-SMC evidence & Bayes factor
+
+    # Rebuild evidence traces with adaptive window spans
+    t_piecewise = []
+    abc_eu_piecewise = []
+    abc_tr_piecewise = []
+    direct_evidence_piecewise = []
+    for i, (s, e) in enumerate(window_bounds):
+        t_piecewise.extend(t[s:e])
+        abc_eu_piecewise.extend([abc_evidence_eu[i]] * (e - s))
+        abc_tr_piecewise.extend([abc_evidence_tr[i]] * (e - s))
+        direct_evidence_piecewise.extend([direct_evidence[i]] * (e - s))
+    # Compute piecewise Bayes factor
+    bf_piecewise = [tr / eu if eu > 0 else np.inf for tr, eu in zip(abc_tr_piecewise, abc_eu_piecewise)]
+    
+    # Plot
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
     
-    # (a) Evidence (ABC-SMC)
-    ax1.step(t, abc_evidence_eu_full, where='post', color='cyan', ls='--', label='Euler (ABC)')
-    ax1.step(t, abc_evidence_tr_full, where='post', color='orange', ls='--', label='Trap (ABC)')
+    # (a) ABC-SMC Evidence
+    ax1.step(t_piecewise, abc_eu_piecewise, where='post', color='cyan', ls='--', label='Euler (ABC)')
+    ax1.step(t_piecewise, abc_tr_piecewise, where='post', color='orange', ls='--', label='Trap (ABC)')
+    ax1.step(t_piecewise, direct_evidence_piecewise, where='post', color='black', ls='-', label='Direct (Uniform Prior)')
+
+
     ax1.set_yscale('log')
     ax1.set_xlabel('Time (s)')
     ax1.set_ylabel('Model evidence')
@@ -865,9 +941,8 @@ def run_simple_analysis():
     ax1.legend()
     ax1.grid(True, which='both', alpha=0.3)
     
-    # (b) Bayes factor (ABC-SMC)
-    bf_abc = abc_evidence_tr_full / abc_evidence_eu_full
-    ax2.step(t, bf_abc, where='post', color='green', ls='--', label='Trap/Euler (ABC)')
+    # (b) ABC-SMC Bayes factor
+    ax2.step(t_piecewise, bf_piecewise, where='post', color='green', ls='--', label='Trap/Euler (ABC)')
     ax2.axhline(1.0, color='gray', ls='--', alpha=0.6)
     ax2.set_yscale('log')
     ax2.set_xlabel('Time (s)')
@@ -879,6 +954,7 @@ def run_simple_analysis():
     plt.suptitle('Figure 4 — ABC-SMC: Evidence & Bayes factor (joint ε schedule)')
     plt.tight_layout()
     plt.show()
+
     
     # Summary statistics
     print(f"\nSummary:")
